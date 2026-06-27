@@ -35,7 +35,11 @@ export function createAzureDevOpsClient(config: Config, logger: Logger): AzureDe
         const res = await http.get(`/workitems/${id}`, {
           params: { $expand: "all", "api-version": apiVersion },
         });
-        return res.data as AdoWorkItem;
+        const data = res.data as AdoWorkItem;
+        if (!data || typeof data.id !== "number") {
+          throw new Error("unexpected response shape (check PAT scope and org/project)");
+        }
+        return data;
       } catch (error) {
         throw new Error(`ADO getWorkItem(${id}) failed: ${describeAxiosError(error)}`);
       }

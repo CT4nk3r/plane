@@ -64,8 +64,13 @@ export function createPlaneClient(config: Config, logger: Logger): PlaneClient {
     for (let page = 0; page < 1000; page += 1) {
       const params: Record<string, string | number> = { per_page: 100 };
       if (cursor) params.cursor = cursor;
-      const res = await http.get(path, { params });
-      const data = res.data as T[] | Paginated<T>;
+      let data: T[] | Paginated<T>;
+      try {
+        const res = await http.get(path, { params });
+        data = res.data as T[] | Paginated<T>;
+      } catch (error) {
+        throw new Error(`Plane GET ${path} failed: ${describeAxiosError(error)}`);
+      }
       if (Array.isArray(data)) {
         out.push(...data);
         break;
