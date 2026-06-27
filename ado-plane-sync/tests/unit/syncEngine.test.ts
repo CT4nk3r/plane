@@ -57,6 +57,7 @@ function fakeConnector(rev: number): Connector {
     parseWebhook: vi.fn(),
     fetchEntity: vi.fn().mockResolvedValue(mapped),
     addBacklink: vi.fn().mockResolvedValue(1),
+    listEntities: vi.fn().mockResolvedValue([]),
   };
 }
 

@@ -64,4 +64,6 @@ export interface Connector {
   fetchEntity(event: NormalizedEvent, ctx: ConnectionContext): Promise<MappedEntity>;
   /** Best-effort backlink on the source entity; returns the comment id or null. */
   addBacklink(event: NormalizedEvent, planeIssueUrl: string, ctx: ConnectionContext): Promise<number | null>;
+  /** Enumerate entities to backfill for a scope (e.g. "assigned-to-me"). */
+  listEntities(scope: string, ctx: ConnectionContext): Promise<NormalizedEvent[]>;
 }

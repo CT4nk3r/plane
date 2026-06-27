@@ -14,6 +14,8 @@ import { describeAxiosError } from "./http";
 export interface AzureDevOpsClient {
   getWorkItem(id: number): Promise<AdoWorkItem>;
   addBacklinkComment(id: number, text: string): Promise<number | null>;
+  /** Run a WIQL query and return the matching work item ids. */
+  queryWorkItemIds(wiql: string): Promise<number[]>;
 }
 
 export function createAzureDevOpsClient(config: Config, logger: Logger): AzureDevOpsClient {
@@ -59,6 +61,22 @@ export function createAzureDevOpsClient(config: Config, logger: Logger): AzureDe
         // Backlink is best-effort; log but don't fail the sync.
         logger.warn("ado.backlink.failed", { workItemId: id, error: describeAxiosError(error) });
         return null;
+      }
+    },
+
+    async queryWorkItemIds(wiql: string): Promise<number[]> {
+      try {
+        const res = await http.post(
+          "/wiql",
+          { query: wiql },
+          { params: { "api-version": apiVersion } },
+        );
+        const items = (res.data as { workItems?: { id?: unknown }[] }).workItems ?? [];
+        return items
+          .map((item) => item.id)
+          .filter((id): id is number => typeof id === "number");
+      } catch (error) {
+        throw new Error(`ADO WIQL query failed: ${describeAxiosError(error)}`);
       }
     },
   };

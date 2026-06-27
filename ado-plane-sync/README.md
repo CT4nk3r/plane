@@ -182,6 +182,43 @@ missing/invalid, and `404` for an unknown provider slug.
 
 ---
 
+## Backfill existing work items (scoped)
+
+The webhook syncs **new and changed** items. To pull **existing** items in, run the
+backfill CLI with a **scope** (so you don't import the entire org):
+
+```bash
+# locally
+pnpm backfill assigned-to-me
+
+# with Docker (shares the service's database automatically)
+docker compose run --rm ado-plane-sync node dist/cli/backfill.js active
+```
+
+Each matched work item flows through the same engine (dynamic states, cycles,
+labels, idempotency), so re-running is safe — unchanged items are skipped.
+
+| Scope | Pulls |
+| --- | --- |
+| `assigned-to-me` / `assigned-to:<user>` | Items assigned to you (the PAT owner) / a user |
+| `created-by-me` / `created-by:<user>` | Items you / a user created |
+| `active` | Items not in a done/closed/removed state |
+| `recent` / `recent:<days>` | Items changed in the last N days (default 14) |
+| `sprint:<name>` | Items under an iteration (sprint) |
+| `area:<name>` | Items under an area path |
+| `all` | The whole project (Jira-importer style) |
+| `query:<WIQL>` | A raw WIQL query (advanced) |
+
+`@Me` resolves to the **PAT owner**, so for *"assigned to me"* use your own PAT (or
+`assigned-to:<email>`). Tune `BACKFILL_LIMIT` (default 500) and
+`BACKFILL_CONCURRENCY` (default 3); the CLI prints a JSON summary
+(`found / created / updated / skipped / failed`).
+
+> Pull requests aren't covered — ADO PRs are a Git artifact, not work items, and
+> Plane has no PR entity.
+
+---
+
 ## Endpoints
 
 | Method | Path | Description |

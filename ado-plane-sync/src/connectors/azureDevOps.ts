@@ -10,6 +10,7 @@ import type { Logger } from "../logger";
 import { mapWorkItem } from "../mappers/workItemMapper";
 import { parseWorkItemEvent } from "../parsers/azureDevOpsWebhook";
 import type { ConnectionContext } from "../types";
+import { buildWorkItemWiql } from "./azureDevOpsBackfill";
 import type { Connector, MappedEntity, NormalizedEvent } from "./types";
 
 export const AZURE_DEVOPS_WEBHOOK_SLUG = "azure-devops";
@@ -69,6 +70,22 @@ export function createAzureDevOpsConnector(config: Config, logger: Logger): Conn
         Number(event.externalId),
         `Synced to Plane: <a href="${planeIssueUrl}">${planeIssueUrl}</a>`,
       );
+    },
+
+    async listEntities(scope: string, ctx: ConnectionContext): Promise<NormalizedEvent[]> {
+      const wiql = buildWorkItemWiql(scope, config.ado.project);
+      logger.debug("ado.backfill.wiql", { scope, wiql });
+      const ids = await ado.queryWorkItemIds(wiql);
+      // externalRev 0 -> the engine fetches the authoritative work item (and rev).
+      return ids.map((id) => ({
+        provider,
+        eventType: "backfill",
+        externalId: String(id),
+        externalRev: 0,
+        org: ctx.externalOrg,
+        project: ctx.externalProject,
+        raw: {},
+      }));
     },
   };
 }
