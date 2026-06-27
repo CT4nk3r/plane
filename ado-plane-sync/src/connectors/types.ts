@@ -8,7 +8,7 @@
  * entity, optionally post a backlink) and register it in `registry.ts`.
  */
 
-import type { ConnectionContext, ExternalUserRef } from "../types";
+import type { ConnectionContext, ExternalUserRef, PlanePriority } from "../types";
 
 export type WebhookParseErrorCode = "unsupported_event" | "invalid";
 
@@ -39,9 +39,14 @@ export interface MappedEntity {
   descriptionHtml?: string;
   /** Target Plane state name (already run through the connection's state map). */
   stateName?: string;
-  /** Label names (e.g. from tags). */
+  /** Label names (e.g. from tags, work item type). */
   tags: string[];
   assignee: ExternalUserRef | null;
+  priority?: PlanePriority;
+  /** Sprint/cycle name to ensure + assign, if any. */
+  cycleName?: string;
+  /** Parent entity's external id, for best-effort parent linking. */
+  parentExternalId?: string;
   externalId: string;
   externalSource: string;
   externalUrl?: string;

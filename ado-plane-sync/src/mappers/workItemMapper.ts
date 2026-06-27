@@ -6,7 +6,7 @@
  */
 
 import { resolvePlaneStateName } from "./stateMapper";
-import type { ExternalUserRef, AdoWorkItem } from "../types";
+import type { ExternalUserRef, AdoWorkItem, PlanePriority } from "../types";
 
 export interface MappedWorkItem {
   name: string;
@@ -17,6 +17,11 @@ export interface MappedWorkItem {
   tags: string[];
   assignee: ExternalUserRef | null;
   workItemType?: string;
+  priority?: PlanePriority;
+  /** Leaf iteration name (e.g. "Sprint 3"), undefined for backlog/root. */
+  cycleName?: string;
+  /** ADO parent work item id, if any. */
+  parentExternalId?: string;
   url?: string;
   externalId: string;
   externalSource: string;
@@ -29,6 +34,37 @@ export interface MapWorkItemOptions {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() !== "" ? value : undefined;
+}
+
+/** ADO `Microsoft.VSTS.Common.Priority` (1..4) -> Plane priority. */
+export function mapPriority(value: unknown): PlanePriority | undefined {
+  const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  switch (n) {
+    case 1:
+      return "urgent";
+    case 2:
+      return "high";
+    case 3:
+      return "medium";
+    case 4:
+      return "low";
+    default:
+      return undefined;
+  }
+}
+
+/** `System.IterationPath` -> leaf iteration name, or undefined when at the root. */
+export function iterationLeaf(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim() === "") return undefined;
+  const parts = value.split("\\").map((p) => p.trim()).filter((p) => p.length > 0);
+  // First segment is the project/root node; only a deeper path is a real sprint.
+  return parts.length > 1 ? parts[parts.length - 1] : undefined;
+}
+
+function parentId(value: unknown): string | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  if (typeof value === "string" && value.trim() !== "" && Number.isFinite(Number(value))) return value.trim();
+  return undefined;
 }
 
 /** ADO tags are a single "tag1; tag2; tag3" string. */
@@ -74,6 +110,9 @@ export function mapWorkItem(workItem: AdoWorkItem, options: MapWorkItemOptions):
   const tags = parseTags(fields["System.Tags"]);
   const assignee = normalizeAdoUser(fields["System.AssignedTo"]);
   const workItemType = asString(fields["System.WorkItemType"]);
+  const priority = mapPriority(fields["Microsoft.VSTS.Common.Priority"]);
+  const cycleName = iterationLeaf(fields["System.IterationPath"]);
+  const parentExternalId = parentId(fields["System.Parent"]);
   const url = workItem._links?.html?.href ?? workItem.url;
 
   return {
@@ -83,6 +122,9 @@ export function mapWorkItem(workItem: AdoWorkItem, options: MapWorkItemOptions):
     tags,
     assignee,
     workItemType,
+    priority,
+    cycleName,
+    parentExternalId,
     url,
     externalId: String(workItem.id),
     externalSource: options.externalSource,

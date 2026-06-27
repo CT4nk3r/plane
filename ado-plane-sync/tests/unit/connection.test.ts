@@ -12,7 +12,7 @@ describe("bootstrapConnection", () => {
   it("seeds the layered rows and ensures the default sync label", async () => {
     const store = createInMemorySyncStore();
     const ensureLabel = vi.fn().mockResolvedValue("label-default");
-    const config = loadTestConfig();
+    const config = loadTestConfig({ STATE_MAP_JSON: '{"Active":"In Progress"}' });
 
     const ctx = await bootstrapConnection(config, store, fakePlane(ensureLabel), silentLogger);
 

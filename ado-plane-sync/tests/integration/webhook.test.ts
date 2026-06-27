@@ -34,7 +34,7 @@ function webhookBody(rev: number): Record<string, unknown> {
 }
 
 function harness() {
-  const config = loadTestConfig();
+  const config = loadTestConfig({ STATE_MAP_JSON: '{"Active":"In Progress"}' });
   const store = createInMemorySyncStore();
   const queue = createInMemoryJobQueue();
   const plane = createPlaneClient(config, silentLogger);
@@ -124,9 +124,14 @@ describe("POST /webhooks/:provider", () => {
       .get(`${PLANE_BASE}/work-items/`)
       .query((q) => q.external_id === "42")
       .reply(404, {});
+    // Tags + the work-item-type label ("Bug") are find-or-created dynamically.
     nock(PLANE_HOST)
-      .post(`${PLANE_BASE}/labels/`, (b) => b.name === "frontend")
-      .reply(201, { id: "label-frontend", name: "frontend" });
+      .post(`${PLANE_BASE}/labels/`)
+      .reply(201, (_uri, body: { name?: string }) => ({
+        id: `label-${String(body.name).toLowerCase()}`,
+        name: body.name,
+      }))
+      .persist();
     nock(PLANE_HOST)
       .post(`${PLANE_BASE}/work-items/`, (b) => {
         createBody = b;
@@ -148,7 +153,9 @@ describe("POST /webhooks/:provider", () => {
     expect(createBody.external_source).toBe("azure_devops");
     expect(createBody.state).toBe("state-1");
     expect(createBody.assignees).toEqual(["member-1"]);
-    expect(createBody.labels).toEqual(expect.arrayContaining(["label-default", "label-frontend"]));
+    expect(createBody.labels).toEqual(
+      expect.arrayContaining(["label-default", "label-frontend", "label-bug"]),
+    );
     expect(createBody.name).toBe("Login button is misaligned");
 
     let sync = await store.getEntitySync("azure_devops", "myorg", "myproject", "42");

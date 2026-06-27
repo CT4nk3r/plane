@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolvePlaneStateName } from "../../src/mappers/stateMapper";
+import { inferStateGroup, resolvePlaneStateName } from "../../src/mappers/stateMapper";
 
 const stateMap = { New: "Backlog", Active: "In Progress", Resolved: "Done", Closed: "Done" };
 
@@ -22,5 +22,34 @@ describe("resolvePlaneStateName", () => {
     expect(resolvePlaneStateName("", stateMap)).toBeUndefined();
     expect(resolvePlaneStateName(undefined, stateMap)).toBeUndefined();
     expect(resolvePlaneStateName(null, stateMap)).toBeUndefined();
+  });
+});
+
+describe("inferStateGroup", () => {
+  it("maps a real ADO kanban board's columns to sensible Plane groups", () => {
+    const columns = {
+      "To Do": "unstarted",
+      Development: "started",
+      "Test needed": "started",
+      Testing: "started",
+      Integration: "started",
+      Done: "completed",
+    } as const;
+    for (const [name, group] of Object.entries(columns)) {
+      expect(inferStateGroup(name, {}, "started")).toBe(group);
+    }
+  });
+
+  it("honors an explicit group override (case-insensitive)", () => {
+    expect(inferStateGroup("Integration", { integration: "completed" }, "started")).toBe("completed");
+  });
+
+  it("classifies cancelled-like and backlog-like names", () => {
+    expect(inferStateGroup("Removed", {}, "started")).toBe("cancelled");
+    expect(inferStateGroup("New", {}, "started")).toBe("backlog");
+  });
+
+  it("falls back to the configured default", () => {
+    expect(inferStateGroup("Something Custom", {}, "unstarted")).toBe("unstarted");
   });
 });

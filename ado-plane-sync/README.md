@@ -71,6 +71,31 @@ routing are all provider-agnostic.
 
 ---
 
+## What gets pulled in
+
+For each ADO work item (Bug, Task, User Story, Epic, Feature, Issue, **Test Case**, …):
+
+- **Title / description** → Plane issue name / description.
+- **Board column / state** → Plane state, **created on the fly** if it doesn't exist
+  yet. Your columns (e.g. *To Do, Development, Test needed, Testing, Integration,
+  Done*) appear in Plane automatically — no manual state setup. The Plane state
+  *group* is inferred from the column name (e.g. Done→completed, To Do→unstarted,
+  else `DEFAULT_STATE_GROUP`); override per column with `STATE_GROUP_MAP_JSON`.
+- **Work item type** (Bug, User Story, Test Case, …) → a Plane **label**, so you
+  can filter by type. Toggle with `SYNC_WORK_ITEM_TYPE_AS_LABEL`.
+- **Tags** → Plane labels (find-or-create) + the default sync label.
+- **Iteration / Sprint** (`System.IterationPath`) → a Plane **Cycle**
+  (find-or-create + assign). Toggle with `SYNC_ITERATIONS_AS_CYCLES`.
+- **Priority** (1–4) → Plane priority (urgent/high/medium/low).
+- **Assignee** → Plane member (auto-matched by email, or via `USER_MAP_JSON`).
+- **Parent** → best-effort Plane parent link once the parent is also synced.
+
+> Test **cases** are ADO work items, so they sync like everything else (with a
+> "Test Case" type label). Test **plans/suites** are separate ADO test-management
+> entities (not work items) and aren't synced yet — see *Limitations*.
+
+---
+
 ## Prerequisites
 
 1. **A Plane bot/service user + API token.** Create a dedicated user in your
@@ -118,7 +143,14 @@ All variables are read by `src/config.ts` (validated with zod). See
 | `PLANE_API_KEY` | yes | — | Plane bot API token |
 | `PLANE_WORKSPACE_SLUG` | yes | — | Target Plane workspace slug |
 | `PLANE_PROJECT_ID` | yes | — | Target Plane project UUID |
-| `STATE_MAP_JSON` | no | `{"New":"Backlog","Active":"In Progress","Resolved":"Done","Closed":"Done"}` | ADO state name → Plane state name |
+| `STATE_MAP_JSON` | no | `{}` | Optional rename of ADO state → Plane state name (else used as-is) |
+| `AUTO_CREATE_STATES` | no | `true` | Create missing Plane states from ADO columns |
+| `STATE_GROUP_MAP_JSON` | no | `{}` | Override the Plane group per state name |
+| `DEFAULT_STATE_GROUP` | no | `started` | Group when a state's group can't be inferred |
+| `SYNC_WORK_ITEM_TYPE_AS_LABEL` / `TYPE_LABEL_PREFIX` | no | `true` / `""` | Add work item type as a label |
+| `SYNC_ITERATIONS_AS_CYCLES` | no | `true` | Pull sprints into Plane Cycles |
+| `SYNC_PARENT` | no | `true` | Best-effort parent linking |
+| `SYNC_PRIORITY` | no | `true` | Map ADO priority → Plane priority |
 | `SERVICE` / `EXTERNAL_SOURCE` | no | `azure_devops` | Provider slug written to Plane |
 | `DEFAULT_LABEL_NAME` | no | `Azure DevOps` | Default label applied to every synced issue |
 | `USER_MAP_JSON` | no | `[]` | `[{username, import: "map"\|"invite"\|false, email}]` |
@@ -199,3 +231,8 @@ need no database or network.
   unmapped users are left unassigned. `import: "invite"` is reserved for later.
 - Labels are managed to match ADO tags + the default label, so manually-added
   Plane labels may be overwritten on sync.
+- **Test plans / test suites** (ADO test-management entities) are not synced —
+  only Test **Case** work items are. ADO emits work item webhooks, not test-plan
+  webhooks, so plan/suite sync would need the Test API + polling.
+- **Sprint dates** aren't pulled — cycles are created by name. **Parent links**
+  apply once the parent has itself been synced.

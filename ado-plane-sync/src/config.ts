@@ -7,15 +7,16 @@
 
 import { z } from "zod";
 import type { LogLevel } from "./logger";
-import type { UserMapEntry } from "./types";
+import type { PlaneStateGroup, UserMapEntry } from "./types";
 
-const DEFAULT_STATE_MAP = '{"New":"Backlog","Active":"In Progress","Resolved":"Done","Closed":"Done"}';
+const STATE_GROUPS = ["backlog", "unstarted", "started", "completed", "cancelled"] as const;
 
 const booleanString = z
   .union([z.boolean(), z.enum(["true", "false", "1", "0"])])
   .transform((value) => value === true || value === "true" || value === "1");
 
 const stateMapSchema = z.record(z.string(), z.string());
+const stateGroupMapSchema = z.record(z.string(), z.enum(STATE_GROUPS));
 
 const userMapSchema = z.array(
   z.object({
@@ -42,11 +43,21 @@ const envSchema = z.object({
   PLANE_PROJECT_ID: z.string().min(1, "PLANE_PROJECT_ID is required"),
 
   // Mapping / native integration shape
-  STATE_MAP_JSON: z.string().default(DEFAULT_STATE_MAP),
+  STATE_MAP_JSON: z.string().default("{}"),
+  STATE_GROUP_MAP_JSON: z.string().default("{}"),
+  DEFAULT_STATE_GROUP: z.enum(STATE_GROUPS).default("started"),
+  AUTO_CREATE_STATES: booleanString.default(true),
   SERVICE: z.string().min(1).default("azure_devops"),
   EXTERNAL_SOURCE: z.string().min(1).default("azure_devops"),
   DEFAULT_LABEL_NAME: z.string().min(1).default("Azure DevOps"),
   USER_MAP_JSON: z.string().default("[]"),
+
+  // What to pull in (all on by default for a full trial)
+  SYNC_WORK_ITEM_TYPE_AS_LABEL: booleanString.default(true),
+  TYPE_LABEL_PREFIX: z.string().default(""),
+  SYNC_ITERATIONS_AS_CYCLES: booleanString.default(true),
+  SYNC_PARENT: booleanString.default(true),
+  SYNC_PRIORITY: booleanString.default(true),
 
   // Service / database
   PORT: z.coerce.number().int().positive().default(3100),
@@ -76,7 +87,17 @@ export interface Config {
   externalSource: string;
   defaultLabelName: string;
   stateMap: Record<string, string>;
+  stateGroupMap: Record<string, PlaneStateGroup>;
+  defaultStateGroup: PlaneStateGroup;
+  autoCreateStates: boolean;
   userMap: UserMapEntry[];
+  sync: {
+    workItemTypeAsLabel: boolean;
+    typeLabelPrefix: string;
+    iterationsAsCycles: boolean;
+    parent: boolean;
+    priority: boolean;
+  };
   port: number;
   databaseUrl?: string;
   worker: {
@@ -115,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
 
   const e = parsed.data;
   const stateMap = parseJson(e.STATE_MAP_JSON, stateMapSchema, "STATE_MAP_JSON");
+  const stateGroupMap = parseJson(e.STATE_GROUP_MAP_JSON, stateGroupMapSchema, "STATE_GROUP_MAP_JSON");
   const userMap = parseJson(e.USER_MAP_JSON, userMapSchema, "USER_MAP_JSON");
 
   return {
@@ -137,7 +159,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     externalSource: e.EXTERNAL_SOURCE,
     defaultLabelName: e.DEFAULT_LABEL_NAME,
     stateMap,
+    stateGroupMap,
+    defaultStateGroup: e.DEFAULT_STATE_GROUP,
+    autoCreateStates: e.AUTO_CREATE_STATES,
     userMap,
+    sync: {
+      workItemTypeAsLabel: e.SYNC_WORK_ITEM_TYPE_AS_LABEL,
+      typeLabelPrefix: e.TYPE_LABEL_PREFIX,
+      iterationsAsCycles: e.SYNC_ITERATIONS_AS_CYCLES,
+      parent: e.SYNC_PARENT,
+      priority: e.SYNC_PRIORITY,
+    },
     port: e.PORT,
     databaseUrl: e.DATABASE_URL,
     worker: {

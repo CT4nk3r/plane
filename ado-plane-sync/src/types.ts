@@ -52,6 +52,8 @@ export interface UserMapEntry {
 
 export type PlanePriority = "urgent" | "high" | "medium" | "low" | "none";
 
+export type PlaneStateGroup = "backlog" | "unstarted" | "started" | "completed" | "cancelled";
+
 /** Body sent to Plane to create/update a work item (issue). */
 export interface PlaneIssuePayload {
   name: string;
@@ -60,6 +62,7 @@ export interface PlaneIssuePayload {
   state?: string;
   assignees?: string[];
   labels?: string[];
+  parent?: string;
   external_id: string;
   external_source: string;
 }

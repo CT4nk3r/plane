@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { mapWorkItem, normalizeAdoUser, parseTags } from "../../src/mappers/workItemMapper";
+import {
+  iterationLeaf,
+  mapPriority,
+  mapWorkItem,
+  normalizeAdoUser,
+  parseTags,
+} from "../../src/mappers/workItemMapper";
 import type { AdoWorkItem } from "../../src/types";
 import adoWorkItem from "../fixtures/adoWorkItem.json";
 
@@ -55,5 +61,48 @@ describe("normalizeAdoUser", () => {
   it("returns null for empty input", () => {
     expect(normalizeAdoUser(null)).toBeNull();
     expect(normalizeAdoUser("")).toBeNull();
+  });
+});
+
+describe("mapPriority", () => {
+  it("maps ADO numeric priority to Plane priority", () => {
+    expect(mapPriority(1)).toBe("urgent");
+    expect(mapPriority(2)).toBe("high");
+    expect(mapPriority(3)).toBe("medium");
+    expect(mapPriority(4)).toBe("low");
+    expect(mapPriority("2")).toBe("high");
+    expect(mapPriority(undefined)).toBeUndefined();
+  });
+});
+
+describe("iterationLeaf", () => {
+  it("returns the leaf sprint name for a nested iteration path", () => {
+    expect(iterationLeaf("Project\\Release 1\\Sprint 3")).toBe("Sprint 3");
+    expect(iterationLeaf("Project\\Sprint 1")).toBe("Sprint 1");
+  });
+
+  it("returns undefined at the project root (backlog)", () => {
+    expect(iterationLeaf("Project")).toBeUndefined();
+    expect(iterationLeaf("")).toBeUndefined();
+    expect(iterationLeaf(undefined)).toBeUndefined();
+  });
+});
+
+describe("mapWorkItem extras", () => {
+  it("extracts priority, sprint, and parent", () => {
+    const workItem: AdoWorkItem = {
+      id: 7,
+      rev: 1,
+      fields: {
+        "System.Title": "Parented item",
+        "Microsoft.VSTS.Common.Priority": 1,
+        "System.IterationPath": "Proj\\Sprint 2",
+        "System.Parent": 99,
+      },
+    };
+    const mapped = mapWorkItem(workItem, { stateMap: {}, externalSource: "azure_devops" });
+    expect(mapped.priority).toBe("urgent");
+    expect(mapped.cycleName).toBe("Sprint 2");
+    expect(mapped.parentExternalId).toBe("99");
   });
 });

@@ -10,8 +10,26 @@ describe("loadConfig", () => {
     expect(config.defaultLabelName).toBe("Azure DevOps");
     expect(config.port).toBe(3100);
     expect(config.worker).toEqual({ enabled: true, maxRetries: 5 });
-    expect(config.stateMap.New).toBe("Backlog");
+    expect(config.stateMap).toEqual({});
+    expect(config.defaultStateGroup).toBe("started");
+    expect(config.autoCreateStates).toBe(true);
+    expect(config.sync).toEqual({
+      workItemTypeAsLabel: true,
+      typeLabelPrefix: "",
+      iterationsAsCycles: true,
+      parent: true,
+      priority: true,
+    });
     expect(config.ado.backlinkEnabled).toBe(false);
+  });
+
+  it("rejects an invalid state group", () => {
+    expect(() => loadConfig(testEnv({ DEFAULT_STATE_GROUP: "nope" }))).toThrow(/Invalid configuration/);
+  });
+
+  it("parses STATE_GROUP_MAP_JSON", () => {
+    const config = loadConfig(testEnv({ STATE_GROUP_MAP_JSON: '{"Done":"completed"}' }));
+    expect(config.stateGroupMap.Done).toBe("completed");
   });
 
   it("throws when required variables are missing", () => {

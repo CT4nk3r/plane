@@ -42,8 +42,10 @@ function fakeConnector(rev: number): Connector {
     name: "Login button is misaligned",
     descriptionHtml: "<p>desc</p>",
     stateName: "In Progress",
-    tags: ["frontend"],
+    tags: ["frontend", "Bug"],
     assignee: { uniqueName: "dev@example.com" },
+    priority: "high",
+    cycleName: "Sprint 1",
     externalId: "42",
     externalSource: "azure_devops",
     externalUrl: "https://dev.azure.com/myorg/myproject/_workitems/edit/42",
@@ -62,8 +64,11 @@ function fakePlane(overrides: Partial<PlaneClient> = {}): PlaneClient {
   const created: CreateIssueResult = { status: "created", issue: { id: "issue-1" } };
   return {
     findStateByName: vi.fn().mockResolvedValue({ id: "state-1", name: "In Progress" }),
-    ensureLabels: vi.fn().mockResolvedValue(["label-frontend"]),
+    ensureState: vi.fn().mockResolvedValue("state-1"),
+    ensureLabels: vi.fn().mockResolvedValue(["label-frontend", "label-bug"]),
     ensureLabel: vi.fn().mockResolvedValue("label-default"),
+    ensureCycle: vi.fn().mockResolvedValue("cycle-1"),
+    addIssueToCycle: vi.fn().mockResolvedValue(undefined),
     listMembers: vi.fn().mockResolvedValue([{ id: "member-1", email: "dev@example.com" }]),
     getWorkItemByExternalId: vi.fn().mockResolvedValue(null),
     createIssue: vi.fn().mockResolvedValue(created),
@@ -91,8 +96,12 @@ describe("syncEntity", () => {
     expect(payload.external_id).toBe("42");
     expect(payload.external_source).toBe("azure_devops");
     expect(payload.state).toBe("state-1");
+    expect(payload.priority).toBe("high");
     expect(payload.assignees).toEqual(["member-1"]);
     expect(payload.labels).toEqual(expect.arrayContaining(["label-frontend", "label-default"]));
+
+    expect(plane.ensureCycle).toHaveBeenCalledWith("Sprint 1");
+    expect(plane.addIssueToCycle).toHaveBeenCalledWith("cycle-1", "issue-1");
 
     const sync = await store.getEntitySync("azure_devops", "myorg", "myproject", "42");
     expect(sync?.plane_issue_id).toBe("issue-1");

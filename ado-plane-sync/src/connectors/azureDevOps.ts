@@ -41,12 +41,22 @@ export function createAzureDevOpsConnector(config: Config, logger: Logger): Conn
         stateMap: ctx.stateMap,
         externalSource: ctx.externalSource,
       });
+
+      // Work item type -> label (e.g. "Bug", "User Story", "Test Case").
+      const tags = [...mapped.tags];
+      if (config.sync.workItemTypeAsLabel && mapped.workItemType) {
+        tags.push(`${config.sync.typeLabelPrefix}${mapped.workItemType}`);
+      }
+
       return {
         name: mapped.name,
         descriptionHtml: mapped.descriptionHtml,
         stateName: mapped.stateName,
-        tags: mapped.tags,
+        tags,
         assignee: mapped.assignee,
+        priority: config.sync.priority ? mapped.priority : undefined,
+        cycleName: config.sync.iterationsAsCycles ? mapped.cycleName : undefined,
+        parentExternalId: config.sync.parent ? mapped.parentExternalId : undefined,
         externalId: mapped.externalId,
         externalSource: mapped.externalSource,
         externalUrl: mapped.url,

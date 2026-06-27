@@ -13,6 +13,7 @@ import type { Config } from "../config";
 import type { Connector, NormalizedEvent } from "../connectors/types";
 import type { SyncStore } from "../db";
 import type { Logger } from "../logger";
+import { inferStateGroup } from "../mappers/stateMapper";
 import { resolveAssigneeId } from "../mappers/userMapper";
 import type { ConnectionContext, PlaneIssuePayload } from "../types";
 
@@ -63,12 +64,18 @@ export async function syncEntity(
   if (mapped.descriptionHtml) {
     payload.description_html = mapped.descriptionHtml;
   }
+  if (mapped.priority) {
+    payload.priority = mapped.priority;
+  }
   if (mapped.stateName) {
-    const state = await plane.findStateByName(mapped.stateName);
-    if (state) {
-      payload.state = state.id;
+    const group = inferStateGroup(mapped.stateName, config.stateGroupMap, config.defaultStateGroup);
+    const stateId = config.autoCreateStates
+      ? await plane.ensureState(mapped.stateName, group)
+      : (await plane.findStateByName(mapped.stateName))?.id;
+    if (stateId) {
+      payload.state = stateId;
     } else {
-      logger.warn("sync.state_not_found", { externalId, stateName: mapped.stateName });
+      logger.warn("sync.state_unresolved", { externalId, stateName: mapped.stateName });
     }
   }
   const labelIds = new Set(await plane.ensureLabels(mapped.tags));
@@ -120,7 +127,31 @@ export async function syncEntity(
     projectConnectionId: connection.projectConnectionId,
   });
 
-  // 6. Optional backlink on the source entity (only on create).
+  // 6. Sprint -> Plane cycle (find-or-create + assign). Best-effort.
+  if (mapped.cycleName) {
+    const cycleId = await plane.ensureCycle(mapped.cycleName);
+    if (cycleId) {
+      await plane.addIssueToCycle(cycleId, issueId);
+    }
+  }
+
+  // 7. Best-effort parent link (only when the parent is already synced).
+  if (mapped.parentExternalId) {
+    const parentSync = await store.getEntitySync(provider, org, project, mapped.parentExternalId);
+    if (parentSync) {
+      try {
+        await plane.updateIssue(issueId, { parent: parentSync.plane_issue_id });
+      } catch (error) {
+        logger.warn("sync.parent_link_failed", {
+          externalId,
+          parent: mapped.parentExternalId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  // 8. Optional backlink on the source entity (only on create).
   if (config.ado.backlinkEnabled && action === "created") {
     const issueUrl = `${config.plane.baseUrl}/${connection.planeWorkspaceSlug}/projects/${connection.planeProjectId}/issues/${issueId}`;
     const commentId = await connector.addBacklink(event, issueUrl, connection);
