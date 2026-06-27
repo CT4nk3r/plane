@@ -1,0 +1,28 @@
+{
+  "subscriptionId": "00000000-0000-0000-0000-000000000000",
+  "eventType": "workitem.created",
+  "publisherId": "tfs",
+  "resource": {
+    "id": 42,
+    "rev": 1,
+    "fields": {
+      "System.Id": 42,
+      "System.WorkItemType": "Bug",
+      "System.Title": "Login button is misaligned",
+      "System.State": "New",
+      "System.Rev": 1,
+      "System.TeamProject": "myproject",
+      "System.Tags": "frontend",
+      "System.AssignedTo": "Dev One <dev@example.com>"
+    },
+    "_links": {
+      "html": { "href": "https://dev.azure.com/myorg/myproject/_workitems/edit/42" }
+    },
+    "url": "https://dev.azure.com/myorg/_apis/wit/workItems/42"
+  },
+  "resourceContainers": {
+    "collection": { "id": "collection-guid" },
+    "account": { "id": "account-guid" },
+    "project": { "id": "project-guid" }
+  }
+}
