@@ -1,10 +1,10 @@
 /**
- * Connection bootstrap. Mirrors Plane's "install integration -> connect repo to
- * project" flow, but driven by env (the env is the single connection for this
- * MVP). Seeds the layered rows (integration -> workspace_integration ->
- * ado_project -> ado_project_sync) with the native importer-shaped JSON
+ * Connection bootstrap. Mirrors Plane's "install integration -> connect project"
+ * flow, driven by env (the env is the single connection for this MVP). Seeds the
+ * provider-agnostic layered rows (integration -> workspace_integration ->
+ * external_project -> project_connection) with the native importer-shaped JSON
  * (metadata / config / data) and ensures the default sync label exists, then
- * returns the ConnectionContext the worker uses per job.
+ * returns the ConnectionContext the engine uses per job.
  */
 
 import type { PlaneClient } from "./clients/plane";
@@ -19,30 +19,34 @@ export async function bootstrapConnection(
   plane: PlaneClient,
   logger: Logger,
 ): Promise<ConnectionContext> {
+  const provider = config.service;
+
   const integration = await store.upsertIntegration({
-    provider: config.service,
+    provider,
     webhookSecret: config.ado.webhookSecret,
-    metadata: { provider: config.service },
+    metadata: { provider },
   });
 
   const workspaceIntegration = await store.upsertWorkspaceIntegration({
     integrationId: integration.id,
     planeWorkspaceSlug: config.plane.workspaceSlug,
     planeApiToken: config.plane.apiKey,
-    actor: config.service,
+    actor: provider,
     config: { state_map: config.stateMap },
     metadata: {},
   });
 
-  const adoProject = await store.upsertAdoProject({
+  const externalProjectUrl = `${config.ado.baseUrl}/${config.ado.org}/${config.ado.project}`;
+  const externalProject = await store.upsertExternalProject({
+    provider,
     organization: config.ado.org,
     project: config.ado.project,
-    url: `${config.ado.baseUrl}/${config.ado.org}/${config.ado.project}`,
+    url: externalProjectUrl,
     // Native IImporterService.metadata shape (mirrors GitHub {owner,name,repository_id,url}).
     metadata: {
       organization: config.ado.org,
       project: config.ado.project,
-      url: `${config.ado.baseUrl}/${config.ado.org}/${config.ado.project}`,
+      url: externalProjectUrl,
     },
     config: { sync: true },
   });
@@ -59,10 +63,11 @@ export async function bootstrapConnection(
     });
   }
 
-  const projectSync = await store.upsertProjectSync({
-    adoProjectId: adoProject.id,
+  const projectConnection = await store.upsertProjectConnection({
+    provider,
+    externalProjectId: externalProject.id,
     workspaceIntegrationId: workspaceIntegration.id,
-    service: config.service,
+    service: provider,
     status: "completed",
     planeProjectId: config.plane.projectId,
     // Do not persist the raw PAT; record only that PAT auth is configured.
@@ -74,9 +79,9 @@ export async function bootstrapConnection(
   });
 
   logger.info("connection.bootstrapped", {
-    service: config.service,
-    adoOrg: config.ado.org,
-    adoProject: config.ado.project,
+    provider,
+    externalOrg: config.ado.org,
+    externalProject: config.ado.project,
     planeWorkspaceSlug: config.plane.workspaceSlug,
     planeProjectId: config.plane.projectId,
     defaultLabelId,
@@ -85,15 +90,15 @@ export async function bootstrapConnection(
   return {
     integrationId: integration.id,
     workspaceIntegrationId: workspaceIntegration.id,
-    adoProjectId: adoProject.id,
-    projectSyncId: projectSync.id,
-    service: config.service,
+    externalProjectId: externalProject.id,
+    projectConnectionId: projectConnection.id,
+    provider,
     externalSource: config.externalSource,
-    adoOrg: config.ado.org,
-    adoProject: config.ado.project,
+    externalOrg: config.ado.org,
+    externalProject: config.ado.project,
     planeWorkspaceSlug: config.plane.workspaceSlug,
     planeProjectId: config.plane.projectId,
-    defaultLabelId: projectSync.defaultLabelId ?? defaultLabelId,
+    defaultLabelId: projectConnection.defaultLabelId ?? defaultLabelId,
     stateMap: config.stateMap,
     userMap: config.userMap,
   };

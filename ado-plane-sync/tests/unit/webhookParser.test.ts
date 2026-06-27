@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  deriveOrgFromUrl,
-  parseWorkItemEvent,
-  WebhookParseError,
-} from "../../src/parsers/azureDevOpsWebhook";
+import { deriveOrgFromUrl, parseWorkItemEvent } from "../../src/parsers/azureDevOpsWebhook";
+import { WebhookParseError } from "../../src/connectors/types";
 import created from "../fixtures/workitem.created.json";
 import updated from "../fixtures/workitem.updated.json";
 

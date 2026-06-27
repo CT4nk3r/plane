@@ -6,7 +6,7 @@
  */
 
 import { resolvePlaneStateName } from "./stateMapper";
-import type { AdoUserRef, AdoWorkItem } from "../types";
+import type { ExternalUserRef, AdoWorkItem } from "../types";
 
 export interface MappedWorkItem {
   name: string;
@@ -15,7 +15,7 @@ export interface MappedWorkItem {
   stateName?: string;
   /** Label names derived from ADO tags. */
   tags: string[];
-  assignee: AdoUserRef | null;
+  assignee: ExternalUserRef | null;
   workItemType?: string;
   url?: string;
   externalId: string;
@@ -41,10 +41,10 @@ export function parseTags(value: unknown): string[] {
 }
 
 /** ADO `System.AssignedTo` may be an object (modern) or "Name <email>" string. */
-export function normalizeAdoUser(value: unknown): AdoUserRef | null {
+export function normalizeAdoUser(value: unknown): ExternalUserRef | null {
   if (value && typeof value === "object") {
     const v = value as Record<string, unknown>;
-    const ref: AdoUserRef = {};
+    const ref: ExternalUserRef = {};
     if (typeof v.id === "string") ref.id = v.id;
     if (typeof v.displayName === "string") ref.displayName = v.displayName;
     if (typeof v.uniqueName === "string") ref.uniqueName = v.uniqueName;

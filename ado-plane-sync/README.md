@@ -1,12 +1,16 @@
 # ado-plane-sync
 
-An external sync service that ingests **Azure DevOps** Service Hook webhooks
-(`workitem.created` / `workitem.updated`) and syncs each work item into **Plane**
-as a work item (issue). It runs alongside Plane and talks to Plane's public REST
-API — **Plane itself is not modified**.
+A multi-provider sync service that ingests external Service Hook / webhook events
+and syncs them into **Plane** as work items (issues). It runs alongside Plane and
+talks to Plane's public REST API — **Plane itself is not modified**.
 
-It is deliberately built to feel native to Plane, following the conventions
-shared by Plane's own **GitHub** integration and **Jira** importer.
+It's structured the way Plane's own integrations service ("Silo") is: a generic
+sync **engine** plus per-provider **connectors**. **Azure DevOps**
+(`workitem.created` / `workitem.updated`) is the first connector; adding GitHub,
+GitLab, Jira, etc. is a new connector module + one registry line.
+
+It deliberately follows the conventions shared by Plane's own **GitHub**
+integration and **Jira** importer.
 
 ---
 
@@ -15,8 +19,8 @@ shared by Plane's own **GitHub** integration and **Jira** importer.
 | Plane convention (real) | Where it lives in Plane | What this service does |
 | --- | --- | --- |
 | `external_id` + `external_source` as the idempotent link on every entity | `apps/api/.../db/models/issue.py`, label/state; create returns **409 + existing id** on duplicate | Every synced issue/label is written with `external_source="azure_devops"`, `external_id="<ado id>"` |
-| Layered sync model `Integration → WorkspaceIntegration → *Repository/Project → *IssueSync → *CommentSync` | `db/models/integration/github.py` | `integrations → workspace_integrations → ado_projects → ado_project_syncs → ado_work_item_syncs → ado_comment_syncs` |
-| Importer connection shape `{ service, status, config, metadata, data }` with `data.users` user mapping | `packages/types/src/importer` (`IImporterService`, jira/github importers) | `ado_project_syncs` stores `service`, `status`, `config` (`{sync, state_map}`), `metadata` (`{organization, project, url}`), `data` (`{users}`) |
+| Layered sync model `Integration → WorkspaceIntegration → *Repository/Project → *IssueSync → *CommentSync` | `db/models/integration/github.py` | `integrations → workspace_integrations → external_projects → project_connections → entity_item_syncs → entity_comment_syncs` |
+| Importer connection shape `{ service, status, config, metadata, data }` with `data.users` user mapping | `packages/types/src/importer` (`IImporterService`, jira/github importers) | `project_connections` stores `service`, `status`, `config` (`{sync, state_map}`); `external_projects.metadata` holds `{organization, project, url}`; `data` holds `{users}` |
 | Bot **actor + API token** used for all writes | `WorkspaceIntegration.actor` + `api_token` | `PLANE_API_KEY` is the bot/service-account token |
 | Default sync label applied to every synced issue | `GithubRepositorySync.label` | `DEFAULT_LABEL_NAME` is find-or-created and attached to every synced issue |
 | Async webhook processing with retries | Celery `webhook_send_task` (`retry_backoff`, `max_retries=5`) | Durable `sync_jobs` queue + worker with exponential backoff, `WORKER_MAX_RETRIES` |
@@ -32,25 +36,38 @@ shared by Plane's own **GitHub** integration and **Jira** importer.
 ## Architecture
 
 ```
-ADO Service Hook ──HTTP──▶ POST /webhooks/azure-devops
-                              │  (auth: Basic or X-Webhook-Secret)
+Provider webhook ──HTTP──▶ POST /webhooks/:provider   (e.g. /webhooks/azure-devops)
+                              │  auth: Basic or X-Webhook-Secret
                               ▼
-                          parse envelope ──▶ enqueue sync_jobs ──▶ 202 Accepted
-                                                     │
-                              worker (poll, retry)   ▼
-                          fetch full work item from ADO REST
-                                                     │
-                              map fields → resolve state/labels/assignee
-                                                     │
-                          upsert Plane issue (external_id/external_source)
-                                                     │
-                              record ado_work_item_syncs (+ optional ADO backlink)
+                     registry → connector.parseWebhook ──▶ enqueue sync_jobs ──▶ 202
+                                                      │
+                          worker (poll, retry)        ▼
+                     connector.fetchEntity  (fetch authoritative entity + map)
+                                                      │
+                          engine: resolve state/labels/assignee
+                                                      │
+                     upsert Plane issue (external_id/external_source)
+                                                      │
+                          record entity_item_syncs (+ optional backlink)
 ```
 
-Source layout (`src/`): `config`, `logger`, `types`, `db` (schema + stores),
-`queue`, `connection` (bootstrap), `parsers/azureDevOpsWebhook`,
-`mappers/{stateMapper,userMapper,workItemMapper}`, `clients/{azureDevOps,plane}`,
-`sync/workItemSync`, `routes/azureWebhook`, `worker`, `server`, `index`.
+Source layout (`src/`):
+- **Generic core:** `config`, `logger`, `types`, `db` (schema + stores), `queue`,
+  `connection` (bootstrap), `clients/plane`, `sync/syncEngine`, `worker`,
+  `routes/webhook`, `server`, `index`.
+- **Connectors:** `connectors/types` (the `Connector` interface + registry shape),
+  `connectors/registry` (which providers exist), `connectors/azureDevOps`.
+- **ADO building blocks** used by the ADO connector: `parsers/azureDevOpsWebhook`,
+  `clients/azureDevOps`, `mappers/{stateMapper,userMapper,workItemMapper}`.
+
+### Adding a provider
+
+1. Implement `Connector` (`connectors/types.ts`): `parseWebhook`, `fetchEntity`
+   (fetch + map to neutral fields), and `addBacklink`.
+2. Register it in `connectors/registry.ts`.
+
+That's it — the engine, queue, worker, schema, and `POST /webhooks/:provider`
+routing are all provider-agnostic.
 
 ---
 
@@ -128,8 +145,8 @@ In your ADO project: **Project settings → Service hooks → + → Web Hooks**.
 4. Leave the resource details at defaults and finish.
 
 The endpoint returns `202` when a job is queued, `200 {"status":"ignored"}` for
-unsupported event types, `400` for malformed payloads, and `401` when the secret
-is missing/invalid.
+unsupported event types, `400` for malformed payloads, `401` when the secret is
+missing/invalid, and `404` for an unknown provider slug.
 
 ---
 
@@ -137,20 +154,21 @@ is missing/invalid.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness probe |
-| `POST` | `/webhooks/azure-devops` | Receives ADO Service Hook events |
+| `GET` | `/health` | Liveness probe; returns the registered providers |
+| `POST` | `/webhooks/:provider` | Receives a provider's webhook (e.g. `/webhooks/azure-devops`) |
 
 ---
 
 ## Data model
 
-`ensureSchema()` creates these tables on boot (idempotent):
+`ensureSchema()` creates these provider-agnostic tables on boot (idempotent);
+every per-provider row carries a `provider` column:
 
 - `integrations`, `workspace_integrations` — the provider + workspace install
-- `ado_projects`, `ado_project_syncs` — the connected external project ↔ Plane project
-- `ado_work_item_syncs` — work item ↔ Plane issue mapping (`last_ado_rev` drives idempotency)
-- `ado_comment_syncs` — backlink/comment mapping
-- `sync_jobs` — the durable webhook queue
+- `external_projects`, `project_connections` — the connected external project ↔ Plane project
+- `entity_item_syncs` — external entity ↔ Plane issue mapping (`external_rev` drives idempotency)
+- `entity_comment_syncs` — backlink/comment mapping
+- `sync_jobs` — the durable webhook queue (the provider travels in the job payload)
 
 ---
 
@@ -175,7 +193,7 @@ need no database or network.
   by env. Multiple connections is a natural extension (more rows, mirroring
   `EntityConnection`).
 - **ADO → Plane only.** Plane → ADO and full comment sync are out of scope; the
-  `ado_comment_syncs` structure and `external_source` tagging lay the groundwork.
+  `entity_comment_syncs` structure and `external_source` tagging lay the groundwork.
 - **PAT auth**, not the OAuth App-installation flow GitHub uses.
 - **Assignee mapping is best-effort** (email → Plane member, via `USER_MAP_JSON`);
   unmapped users are left unassigned. `import: "invite"` is reserved for later.

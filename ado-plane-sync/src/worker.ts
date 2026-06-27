@@ -1,14 +1,16 @@
 /**
- * Background worker. Drains the sync_jobs queue and runs `syncWorkItem` per job,
- * with bounded exponential-backoff retries — mirroring Plane's
- * `webhook_send_task` (autoretry, max_retries, backoff, then give up).
+ * Background worker. Drains the sync_jobs queue, resolves the connector for each
+ * job's provider, and runs the generic sync engine — with bounded
+ * exponential-backoff retries, mirroring Plane's `webhook_send_task`.
  */
 
+import type { ConnectorRegistry } from "./connectors/registry";
+import type { NormalizedEvent } from "./connectors/types";
 import type { JobQueue } from "./queue";
 import type { Logger } from "./logger";
-import type { SyncDeps, SyncOutcome } from "./sync/workItemSync";
-import { syncWorkItem } from "./sync/workItemSync";
-import type { ParsedWebhookEvent, SyncJob } from "./types";
+import type { SyncDeps, SyncOutcome } from "./sync/syncEngine";
+import { syncEntity } from "./sync/syncEngine";
+import type { SyncJob } from "./types";
 
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -20,6 +22,7 @@ export function computeBackoffMs(attempt: number): number {
 
 export interface WorkerDeps {
   queue: JobQueue;
+  registry: ConnectorRegistry;
   syncDeps: SyncDeps;
   maxRetries: number;
   logger: Logger;
@@ -39,15 +42,23 @@ export interface Worker {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 export function createWorker(deps: WorkerDeps): Worker {
-  const { queue, syncDeps, maxRetries, logger } = deps;
+  const { queue, registry, syncDeps, maxRetries, logger } = deps;
 
   async function processOnce(): Promise<ProcessResult | null> {
     const job = await queue.claimNext();
     if (!job) return null;
 
+    const event = job.payload as NormalizedEvent;
+    const connector = registry.byProvider.get(event.provider);
+    if (!connector) {
+      const error = `No connector registered for provider "${event.provider}"`;
+      await queue.fail(job.id, { error, nextAttemptAt: new Date(), exhausted: true });
+      logger.error("worker.no_connector", { jobId: job.id, provider: event.provider });
+      return { job, error };
+    }
+
     try {
-      const event = job.payload as ParsedWebhookEvent;
-      const outcome = await syncWorkItem(event, syncDeps);
+      const outcome = await syncEntity(connector, event, syncDeps);
       await queue.complete(job.id);
       return { job, outcome };
     } catch (error) {
@@ -57,6 +68,7 @@ export function createWorker(deps: WorkerDeps): Worker {
       await queue.fail(job.id, { error: message, nextAttemptAt, exhausted });
       logger.error("worker.job.failed", {
         jobId: job.id,
+        provider: event.provider,
         attempts: job.attempts,
         exhausted,
         error: message,

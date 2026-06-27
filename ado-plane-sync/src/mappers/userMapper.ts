@@ -10,12 +10,12 @@
  * a Plane member with that email exists, otherwise skip).
  */
 
-import type { AdoUserRef, PlaneMember, UserMapEntry } from "../types";
+import type { ExternalUserRef, PlaneMember, UserMapEntry } from "../types";
 
 const EMAIL_RE = /[^\s<>]+@[^\s<>]+/;
 
 /** Best-effort extraction of an email address from an ADO user reference. */
-export function extractEmail(user: AdoUserRef | null | undefined): string | undefined {
+export function extractEmail(user: ExternalUserRef | null | undefined): string | undefined {
   if (!user) return undefined;
   const candidates = [user.uniqueName, user.mail, user.displayName];
   for (const candidate of candidates) {
@@ -36,7 +36,7 @@ function findMemberByEmail(email: string, members: PlaneMember[]): PlaneMember |
  * Resolve an ADO assignee to a Plane member id, or null if it should be skipped.
  */
 export function resolveAssigneeId(
-  assignee: AdoUserRef | null | undefined,
+  assignee: ExternalUserRef | null | undefined,
   userMap: UserMapEntry[],
   members: PlaneMember[],
 ): string | null {

@@ -1,13 +1,13 @@
 /**
- * Entrypoint: load config, prepare the store/queue (Postgres when DATABASE_URL
- * is set, in-memory otherwise), bootstrap the connection, then start the HTTP
- * server and the background worker. Wires graceful shutdown.
+ * Entrypoint: load config, build the connector registry + store/queue (Postgres
+ * when DATABASE_URL is set, in-memory otherwise), bootstrap the connection, then
+ * start the HTTP server and the background worker. Wires graceful shutdown.
  */
 
 import type { Pool } from "pg";
-import { createAzureDevOpsClient } from "./clients/azureDevOps";
 import { createPlaneClient } from "./clients/plane";
 import { loadConfig } from "./config";
+import { buildConnectorRegistry } from "./connectors/registry";
 import { bootstrapConnection } from "./connection";
 import { createInMemorySyncStore, createPgSyncStore, createPool, ensureSchema } from "./db";
 import { createLogger } from "./logger";
@@ -33,22 +33,23 @@ async function main(): Promise<void> {
   const store = pool ? createPgSyncStore(pool) : createInMemorySyncStore();
   const queue = pool ? createPgJobQueue(pool) : createInMemoryJobQueue();
   const plane = createPlaneClient(config, logger);
-  const ado = createAzureDevOpsClient(config, logger);
+  const registry = buildConnectorRegistry(config, logger);
 
   const connection = await bootstrapConnection(config, store, plane, logger);
 
-  const app = createApp({ config, queue, logger });
+  const app = createApp({ config, registry, queue, logger });
   const server = app.listen(config.port, () => {
-    logger.info("server.listening", { port: config.port });
+    logger.info("server.listening", { port: config.port, providers: registry.all.map((c) => c.provider) });
   });
 
   let worker: { stop: () => void } | undefined;
   if (config.worker.enabled) {
     worker = createWorker({
       queue,
+      registry,
       maxRetries: config.worker.maxRetries,
       logger,
-      syncDeps: { config, connection, ado, plane, store, logger },
+      syncDeps: { config, connection, plane, store, logger },
     }).start();
   }
 

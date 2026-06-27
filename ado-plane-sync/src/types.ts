@@ -10,8 +10,8 @@
 
 // --- Azure DevOps ----------------------------------------------------------
 
-/** A user reference as it appears in ADO work item fields (modern object form). */
-export interface AdoUserRef {
+/** A user reference as it appears in an external provider's fields. */
+export interface ExternalUserRef {
   id?: string;
   displayName?: string;
   uniqueName?: string;
@@ -97,18 +97,19 @@ export interface PlaneMember {
 
 /**
  * The resolved connection the worker uses per job. Mirrors the relationship
- * Integration -> WorkspaceIntegration -> ado_project -> ado_project_sync,
- * flattened into the data the sync needs.
+ * Integration -> WorkspaceIntegration -> external_project -> project_connection,
+ * flattened into the data the sync engine needs. Provider-agnostic so the same
+ * engine drives any connector.
  */
 export interface ConnectionContext {
   integrationId: string;
   workspaceIntegrationId: string;
-  adoProjectId: string;
-  projectSyncId: string;
-  service: string;
+  externalProjectId: string;
+  projectConnectionId: string;
+  provider: string;
   externalSource: string;
-  adoOrg: string;
-  adoProject: string;
+  externalOrg: string;
+  externalProject: string;
   planeWorkspaceSlug: string;
   planeProjectId: string;
   defaultLabelId: string | null;
@@ -118,18 +119,19 @@ export interface ConnectionContext {
 
 // --- Persistence rows ------------------------------------------------------
 
-/** Mapping row: mirrors github_issue_syncs (+ the task's required columns). */
-export interface WorkItemSync {
+/** Provider-agnostic entity mapping: mirrors GitHub's per-entity *_syncs. */
+export interface EntitySync {
   id: string;
-  ado_org: string;
-  ado_project: string;
-  ado_work_item_id: number;
-  ado_work_item_url: string | null;
+  provider: string;
+  external_org: string;
+  external_project: string;
+  external_id: string;
+  external_url: string | null;
+  external_rev: number;
   plane_workspace_slug: string;
   plane_project_id: string;
   plane_issue_id: string;
-  project_sync_id: string | null;
-  last_ado_rev: number;
+  project_connection_id: string | null;
   created_at: string;
   updated_at: string;
 }

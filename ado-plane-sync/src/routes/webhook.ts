@@ -1,21 +1,21 @@
 /**
- * POST /webhooks/azure-devops — authenticate, parse, and enqueue.
- *
- * Auth accepts either HTTP Basic (the password must equal ADO_WEBHOOK_SECRET)
- * or an `X-Webhook-Secret` header, compared in constant time. Both are
- * supported because ADO Service Hooks can send either.
+ * POST /webhooks/:provider — authenticate, resolve the connector by slug, parse,
+ * and enqueue. Auth accepts HTTP Basic (password == ADO_WEBHOOK_SECRET) or an
+ * `X-Webhook-Secret` header, compared in constant time.
  */
 
 import { timingSafeEqual } from "node:crypto";
 import { Router } from "express";
 import type { NextFunction, Request, Response } from "express";
 import type { Config } from "../config";
+import type { ConnectorRegistry } from "../connectors/registry";
+import { WebhookParseError } from "../connectors/types";
 import type { JobQueue } from "../queue";
 import type { Logger } from "../logger";
-import { parseWorkItemEvent, WebhookParseError } from "../parsers/azureDevOpsWebhook";
 
 export interface WebhookRouterDeps {
   config: Config;
+  registry: ConnectorRegistry;
   queue: JobQueue;
   logger: Logger;
 }
@@ -50,8 +50,8 @@ function isAuthorized(req: Request, secret: string): boolean {
   return false;
 }
 
-export function createAzureWebhookRouter(deps: WebhookRouterDeps): Router {
-  const { config, queue, logger } = deps;
+export function createWebhookRouter(deps: WebhookRouterDeps): Router {
+  const { config, registry, queue, logger } = deps;
   const router = Router();
 
   const auth = (req: Request, res: Response, next: NextFunction): void => {
@@ -63,29 +63,38 @@ export function createAzureWebhookRouter(deps: WebhookRouterDeps): Router {
     res.status(401).json({ error: "unauthorized" });
   };
 
-  router.post("/", auth, async (req: Request, res: Response): Promise<void> => {
+  router.post("/:provider", auth, async (req: Request, res: Response): Promise<void> => {
+    const slug = req.params.provider;
+    const connector = registry.bySlug.get(slug);
+    if (!connector) {
+      res.status(404).json({ error: `Unknown provider: ${slug}` });
+      return;
+    }
+
     try {
-      const event = parseWorkItemEvent(req.body, {
+      const event = connector.parseWebhook(req.body, {
         org: config.ado.org,
         project: config.ado.project,
       });
-      const dedupeKey = `${event.org}:${event.project}:${event.workItemId}:${event.rev}`;
+      const dedupeKey = `${event.provider}:${event.org}:${event.project}:${event.externalId}:${event.externalRev}`;
       const { id, enqueued } = await queue.enqueue({
         dedupeKey,
         eventType: event.eventType,
         payload: event,
       });
       logger.info("webhook.received", {
+        provider: event.provider,
         eventType: event.eventType,
-        workItemId: event.workItemId,
-        rev: event.rev,
+        externalId: event.externalId,
+        externalRev: event.externalRev,
         enqueued,
         jobId: id,
       });
       res.status(202).json({
         status: enqueued ? "queued" : "duplicate",
         jobId: id,
-        workItemId: event.workItemId,
+        provider: event.provider,
+        externalId: event.externalId,
       });
     } catch (error) {
       if (error instanceof WebhookParseError) {
@@ -97,6 +106,7 @@ export function createAzureWebhookRouter(deps: WebhookRouterDeps): Router {
         return;
       }
       logger.error("webhook.error", {
+        provider: slug,
         error: error instanceof Error ? error.message : String(error),
       });
       res.status(500).json({ error: "internal error" });

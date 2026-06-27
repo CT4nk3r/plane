@@ -9,6 +9,7 @@
  */
 
 import type { ParsedWebhookEvent } from "../types";
+import { WebhookParseError } from "../connectors/types";
 
 export interface ParseFallback {
   org: string;
@@ -53,22 +54,12 @@ export function deriveOrgFromUrl(url: unknown): string | undefined {
   return undefined;
 }
 
-export type WebhookParseErrorCode = "unsupported_event" | "invalid";
-
-export class WebhookParseError extends Error {
-  readonly code: WebhookParseErrorCode;
-  constructor(message: string, code: WebhookParseErrorCode = "invalid") {
-    super(message);
-    this.name = "WebhookParseError";
-    this.code = code;
-  }
-}
-
 /**
  * Parse an ADO webhook body into a normalized envelope. `fallback` supplies the
  * org/project the service is configured for (the payload does not reliably
  * include the org name).
  */
+
 export function parseWorkItemEvent(body: unknown, fallback: ParseFallback): ParsedWebhookEvent {
   if (!isRecord(body)) {
     throw new WebhookParseError("Webhook body must be a JSON object");

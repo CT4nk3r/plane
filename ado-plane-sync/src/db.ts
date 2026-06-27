@@ -1,16 +1,17 @@
 /**
- * Persistence layer. The schema mirrors Plane's GitHub integration tables
- * (integrations -> workspace_integrations -> ado_projects -> ado_project_syncs
- * -> ado_work_item_syncs -> ado_comment_syncs) plus a sync_jobs queue table.
+ * Persistence layer. The schema mirrors Plane's GitHub integration tables but is
+ * provider-agnostic so one engine can drive many connectors (as Plane's "Silo"
+ * does): integrations -> workspace_integrations -> external_projects ->
+ * project_connections -> entity_item_syncs -> entity_comment_syncs, plus a
+ * sync_jobs queue. Every per-provider row carries a `provider` column.
  *
- * `SyncStore` exposes the operations the connection bootstrap and work-item
- * sync need. Two implementations are provided: `PgSyncStore` (production) and
- * `InMemorySyncStore` (tests / DATABASE_URL-less demos).
+ * `SyncStore` has a Postgres implementation (production) and an in-memory one
+ * (tests / DATABASE_URL-less demos).
  */
 
 import { randomUUID } from "node:crypto";
 import { Pool } from "pg";
-import type { SyncJobStatus, WorkItemSync } from "./types";
+import type { EntitySync, SyncJobStatus } from "./types";
 
 export interface UpsertIntegrationInput {
   provider: string;
@@ -27,17 +28,19 @@ export interface UpsertWorkspaceIntegrationInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface UpsertAdoProjectInput {
-  adoProjectId?: string | null;
+export interface UpsertExternalProjectInput {
+  provider: string;
   organization: string;
   project: string;
+  externalId?: string | null;
   url?: string | null;
   metadata?: Record<string, unknown>;
   config?: Record<string, unknown>;
 }
 
-export interface UpsertProjectSyncInput {
-  adoProjectId: string;
+export interface UpsertProjectConnectionInput {
+  provider: string;
+  externalProjectId: string;
   workspaceIntegrationId: string;
   service: string;
   status?: SyncJobStatus;
@@ -48,32 +51,36 @@ export interface UpsertProjectSyncInput {
   data?: Record<string, unknown>;
 }
 
-export interface UpsertWorkItemSyncInput {
-  adoOrg: string;
-  adoProject: string;
-  adoWorkItemId: number;
-  adoWorkItemUrl?: string | null;
+export interface UpsertEntitySyncInput {
+  provider: string;
+  externalOrg: string;
+  externalProject: string;
+  externalId: string;
+  externalUrl?: string | null;
+  externalRev: number;
   planeWorkspaceSlug: string;
   planeProjectId: string;
   planeIssueId: string;
-  projectSyncId?: string | null;
-  lastAdoRev: number;
+  projectConnectionId?: string | null;
 }
 
 export interface RecordCommentSyncInput {
-  adoCommentId?: number | null;
+  provider: string;
+  externalCommentId?: number | null;
   planeCommentId?: string | null;
-  workItemSyncId: string;
+  itemSyncId: string;
 }
 
 export interface SyncStore {
   upsertIntegration(input: UpsertIntegrationInput): Promise<{ id: string }>;
   upsertWorkspaceIntegration(input: UpsertWorkspaceIntegrationInput): Promise<{ id: string }>;
-  upsertAdoProject(input: UpsertAdoProjectInput): Promise<{ id: string }>;
-  upsertProjectSync(input: UpsertProjectSyncInput): Promise<{ id: string; defaultLabelId: string | null }>;
-  setProjectSyncDefaultLabel(id: string, labelId: string): Promise<void>;
-  getWorkItemSync(org: string, project: string, workItemId: number): Promise<WorkItemSync | null>;
-  upsertWorkItemSync(input: UpsertWorkItemSyncInput): Promise<WorkItemSync>;
+  upsertExternalProject(input: UpsertExternalProjectInput): Promise<{ id: string }>;
+  upsertProjectConnection(
+    input: UpsertProjectConnectionInput,
+  ): Promise<{ id: string; defaultLabelId: string | null }>;
+  setProjectConnectionDefaultLabel(id: string, labelId: string): Promise<void>;
+  getEntitySync(provider: string, org: string, project: string, externalId: string): Promise<EntitySync | null>;
+  upsertEntitySync(input: UpsertEntitySyncInput): Promise<EntitySync>;
   recordCommentSync(input: RecordCommentSyncInput): Promise<void>;
   close(): Promise<void>;
 }
@@ -104,24 +111,26 @@ CREATE TABLE IF NOT EXISTS workspace_integrations (
   UNIQUE (plane_workspace_slug, integration_id)
 );
 
-CREATE TABLE IF NOT EXISTS ado_projects (
+CREATE TABLE IF NOT EXISTS external_projects (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ado_project_id TEXT,
+  provider TEXT NOT NULL,
   organization TEXT NOT NULL,
   project TEXT NOT NULL,
+  external_id TEXT,
   url TEXT,
   metadata JSONB NOT NULL DEFAULT '{}',
   config JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (organization, project)
+  UNIQUE (provider, organization, project)
 );
 
-CREATE TABLE IF NOT EXISTS ado_project_syncs (
+CREATE TABLE IF NOT EXISTS project_connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ado_project_id UUID REFERENCES ado_projects(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  external_project_id UUID REFERENCES external_projects(id) ON DELETE CASCADE,
   workspace_integration_id UUID REFERENCES workspace_integrations(id) ON DELETE CASCADE,
-  service TEXT NOT NULL DEFAULT 'azure_devops',
+  service TEXT NOT NULL,
   status TEXT NOT NULL DEFAULT 'queued',
   plane_project_id TEXT NOT NULL,
   credentials JSONB NOT NULL DEFAULT '{}',
@@ -130,30 +139,32 @@ CREATE TABLE IF NOT EXISTS ado_project_syncs (
   data JSONB NOT NULL DEFAULT '{}',
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (plane_project_id, ado_project_id)
+  UNIQUE (provider, plane_project_id, external_project_id)
 );
 
-CREATE TABLE IF NOT EXISTS ado_work_item_syncs (
+CREATE TABLE IF NOT EXISTS entity_item_syncs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ado_org TEXT NOT NULL,
-  ado_project TEXT NOT NULL,
-  ado_work_item_id BIGINT NOT NULL,
-  ado_work_item_url TEXT,
+  provider TEXT NOT NULL,
+  external_org TEXT NOT NULL,
+  external_project TEXT NOT NULL,
+  external_id TEXT NOT NULL,
+  external_url TEXT,
+  external_rev INTEGER NOT NULL DEFAULT 0,
   plane_workspace_slug TEXT NOT NULL,
   plane_project_id TEXT NOT NULL,
   plane_issue_id TEXT NOT NULL,
-  project_sync_id UUID REFERENCES ado_project_syncs(id) ON DELETE SET NULL,
-  last_ado_rev INTEGER NOT NULL DEFAULT 0,
+  project_connection_id UUID REFERENCES project_connections(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (ado_org, ado_project, ado_work_item_id)
+  UNIQUE (provider, external_org, external_project, external_id)
 );
 
-CREATE TABLE IF NOT EXISTS ado_comment_syncs (
+CREATE TABLE IF NOT EXISTS entity_comment_syncs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  ado_comment_id BIGINT,
+  provider TEXT NOT NULL,
+  external_comment_id BIGINT,
   plane_comment_id TEXT,
-  work_item_sync_id UUID REFERENCES ado_work_item_syncs(id) ON DELETE CASCADE,
+  item_sync_id UUID REFERENCES entity_item_syncs(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -188,18 +199,19 @@ function json(value: Record<string, unknown> | undefined): string {
   return JSON.stringify(value ?? {});
 }
 
-function rowToWorkItemSync(row: Record<string, unknown>): WorkItemSync {
+function rowToEntitySync(row: Record<string, unknown>): EntitySync {
   return {
     id: String(row.id),
-    ado_org: String(row.ado_org),
-    ado_project: String(row.ado_project),
-    ado_work_item_id: Number(row.ado_work_item_id),
-    ado_work_item_url: (row.ado_work_item_url as string | null) ?? null,
+    provider: String(row.provider),
+    external_org: String(row.external_org),
+    external_project: String(row.external_project),
+    external_id: String(row.external_id),
+    external_url: (row.external_url as string | null) ?? null,
+    external_rev: Number(row.external_rev),
     plane_workspace_slug: String(row.plane_workspace_slug),
     plane_project_id: String(row.plane_project_id),
     plane_issue_id: String(row.plane_issue_id),
-    project_sync_id: (row.project_sync_id as string | null) ?? null,
-    last_ado_rev: Number(row.last_ado_rev),
+    project_connection_id: (row.project_connection_id as string | null) ?? null,
     created_at: new Date(row.created_at as string).toISOString(),
     updated_at: new Date(row.updated_at as string).toISOString(),
   };
@@ -212,9 +224,7 @@ export function createPgSyncStore(pool: Pool): SyncStore {
         `INSERT INTO integrations (provider, webhook_secret, metadata)
          VALUES ($1, $2, $3::jsonb)
          ON CONFLICT (provider) DO UPDATE
-           SET webhook_secret = EXCLUDED.webhook_secret,
-               metadata = EXCLUDED.metadata,
-               updated_at = now()
+           SET webhook_secret = EXCLUDED.webhook_secret, metadata = EXCLUDED.metadata, updated_at = now()
          RETURNING id`,
         [input.provider, input.webhookSecret, json(input.metadata)],
       );
@@ -227,11 +237,8 @@ export function createPgSyncStore(pool: Pool): SyncStore {
            (integration_id, plane_workspace_slug, plane_api_token, actor, config, metadata)
          VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
          ON CONFLICT (plane_workspace_slug, integration_id) DO UPDATE
-           SET plane_api_token = EXCLUDED.plane_api_token,
-               actor = EXCLUDED.actor,
-               config = EXCLUDED.config,
-               metadata = EXCLUDED.metadata,
-               updated_at = now()
+           SET plane_api_token = EXCLUDED.plane_api_token, actor = EXCLUDED.actor,
+               config = EXCLUDED.config, metadata = EXCLUDED.metadata, updated_at = now()
          RETURNING id`,
         [
           input.integrationId,
@@ -245,21 +252,19 @@ export function createPgSyncStore(pool: Pool): SyncStore {
       return { id: String(res.rows[0].id) };
     },
 
-    async upsertAdoProject(input) {
+    async upsertExternalProject(input) {
       const res = await pool.query(
-        `INSERT INTO ado_projects (ado_project_id, organization, project, url, metadata, config)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb)
-         ON CONFLICT (organization, project) DO UPDATE
-           SET ado_project_id = EXCLUDED.ado_project_id,
-               url = EXCLUDED.url,
-               metadata = EXCLUDED.metadata,
-               config = EXCLUDED.config,
-               updated_at = now()
+        `INSERT INTO external_projects (provider, organization, project, external_id, url, metadata, config)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb)
+         ON CONFLICT (provider, organization, project) DO UPDATE
+           SET external_id = EXCLUDED.external_id, url = EXCLUDED.url,
+               metadata = EXCLUDED.metadata, config = EXCLUDED.config, updated_at = now()
          RETURNING id`,
         [
-          input.adoProjectId ?? null,
+          input.provider,
           input.organization,
           input.project,
+          input.externalId ?? null,
           input.url ?? null,
           json(input.metadata),
           json(input.config),
@@ -268,24 +273,22 @@ export function createPgSyncStore(pool: Pool): SyncStore {
       return { id: String(res.rows[0].id) };
     },
 
-    async upsertProjectSync(input) {
+    async upsertProjectConnection(input) {
       const res = await pool.query(
-        `INSERT INTO ado_project_syncs
-           (ado_project_id, workspace_integration_id, service, status, plane_project_id,
-            credentials, default_label_id, config, data)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8::jsonb, $9::jsonb)
-         ON CONFLICT (plane_project_id, ado_project_id) DO UPDATE
+        `INSERT INTO project_connections
+           (provider, external_project_id, workspace_integration_id, service, status,
+            plane_project_id, credentials, default_label_id, config, data)
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9::jsonb, $10::jsonb)
+         ON CONFLICT (provider, plane_project_id, external_project_id) DO UPDATE
            SET workspace_integration_id = EXCLUDED.workspace_integration_id,
-               service = EXCLUDED.service,
-               status = EXCLUDED.status,
+               service = EXCLUDED.service, status = EXCLUDED.status,
                credentials = EXCLUDED.credentials,
-               default_label_id = COALESCE(EXCLUDED.default_label_id, ado_project_syncs.default_label_id),
-               config = EXCLUDED.config,
-               data = EXCLUDED.data,
-               updated_at = now()
+               default_label_id = COALESCE(EXCLUDED.default_label_id, project_connections.default_label_id),
+               config = EXCLUDED.config, data = EXCLUDED.data, updated_at = now()
          RETURNING id, default_label_id`,
         [
-          input.adoProjectId,
+          input.provider,
+          input.externalProjectId,
           input.workspaceIntegrationId,
           input.service,
           input.status ?? "queued",
@@ -302,57 +305,56 @@ export function createPgSyncStore(pool: Pool): SyncStore {
       };
     },
 
-    async setProjectSyncDefaultLabel(id, labelId) {
+    async setProjectConnectionDefaultLabel(id, labelId) {
       await pool.query(
-        `UPDATE ado_project_syncs SET default_label_id = $2, updated_at = now() WHERE id = $1`,
+        `UPDATE project_connections SET default_label_id = $2, updated_at = now() WHERE id = $1`,
         [id, labelId],
       );
     },
 
-    async getWorkItemSync(org, project, workItemId) {
+    async getEntitySync(provider, org, project, externalId) {
       const res = await pool.query(
-        `SELECT * FROM ado_work_item_syncs
-         WHERE ado_org = $1 AND ado_project = $2 AND ado_work_item_id = $3`,
-        [org, project, workItemId],
+        `SELECT * FROM entity_item_syncs
+         WHERE provider = $1 AND external_org = $2 AND external_project = $3 AND external_id = $4`,
+        [provider, org, project, externalId],
       );
-      return res.rows[0] ? rowToWorkItemSync(res.rows[0]) : null;
+      return res.rows[0] ? rowToEntitySync(res.rows[0]) : null;
     },
 
-    async upsertWorkItemSync(input) {
+    async upsertEntitySync(input) {
       const res = await pool.query(
-        `INSERT INTO ado_work_item_syncs
-           (ado_org, ado_project, ado_work_item_id, ado_work_item_url, plane_workspace_slug,
-            plane_project_id, plane_issue_id, project_sync_id, last_ado_rev)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-         ON CONFLICT (ado_org, ado_project, ado_work_item_id) DO UPDATE
-           SET ado_work_item_url = EXCLUDED.ado_work_item_url,
+        `INSERT INTO entity_item_syncs
+           (provider, external_org, external_project, external_id, external_url, external_rev,
+            plane_workspace_slug, plane_project_id, plane_issue_id, project_connection_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (provider, external_org, external_project, external_id) DO UPDATE
+           SET external_url = EXCLUDED.external_url, external_rev = EXCLUDED.external_rev,
                plane_workspace_slug = EXCLUDED.plane_workspace_slug,
                plane_project_id = EXCLUDED.plane_project_id,
                plane_issue_id = EXCLUDED.plane_issue_id,
-               project_sync_id = EXCLUDED.project_sync_id,
-               last_ado_rev = EXCLUDED.last_ado_rev,
-               updated_at = now()
+               project_connection_id = EXCLUDED.project_connection_id, updated_at = now()
          RETURNING *`,
         [
-          input.adoOrg,
-          input.adoProject,
-          input.adoWorkItemId,
-          input.adoWorkItemUrl ?? null,
+          input.provider,
+          input.externalOrg,
+          input.externalProject,
+          input.externalId,
+          input.externalUrl ?? null,
+          input.externalRev,
           input.planeWorkspaceSlug,
           input.planeProjectId,
           input.planeIssueId,
-          input.projectSyncId ?? null,
-          input.lastAdoRev,
+          input.projectConnectionId ?? null,
         ],
       );
-      return rowToWorkItemSync(res.rows[0]);
+      return rowToEntitySync(res.rows[0]);
     },
 
     async recordCommentSync(input) {
       await pool.query(
-        `INSERT INTO ado_comment_syncs (ado_comment_id, plane_comment_id, work_item_sync_id)
-         VALUES ($1, $2, $3)`,
-        [input.adoCommentId ?? null, input.planeCommentId ?? null, input.workItemSyncId],
+        `INSERT INTO entity_comment_syncs (provider, external_comment_id, plane_comment_id, item_sync_id)
+         VALUES ($1, $2, $3, $4)`,
+        [input.provider, input.externalCommentId ?? null, input.planeCommentId ?? null, input.itemSyncId],
       );
     },
 
@@ -367,75 +369,73 @@ export function createPgSyncStore(pool: Pool): SyncStore {
 export function createInMemorySyncStore(): SyncStore {
   const integrations = new Map<string, { id: string }>();
   const workspaceIntegrations = new Map<string, { id: string }>();
-  const adoProjects = new Map<string, { id: string }>();
-  const projectSyncs = new Map<string, { id: string; defaultLabelId: string | null }>();
-  const workItemSyncs = new Map<string, WorkItemSync>();
+  const externalProjects = new Map<string, { id: string }>();
+  const projectConnections = new Map<string, { id: string; defaultLabelId: string | null }>();
+  const entitySyncs = new Map<string, EntitySync>();
   const commentSyncs: RecordCommentSyncInput[] = [];
 
   const key = (...parts: (string | number)[]): string => parts.join("::");
 
   return {
     async upsertIntegration(input) {
-      const existing = integrations.get(input.provider);
-      const id = existing?.id ?? randomUUID();
+      const id = integrations.get(input.provider)?.id ?? randomUUID();
       integrations.set(input.provider, { id });
       return { id };
     },
 
     async upsertWorkspaceIntegration(input) {
       const k = key(input.planeWorkspaceSlug, input.integrationId);
-      const existing = workspaceIntegrations.get(k);
-      const id = existing?.id ?? randomUUID();
+      const id = workspaceIntegrations.get(k)?.id ?? randomUUID();
       workspaceIntegrations.set(k, { id });
       return { id };
     },
 
-    async upsertAdoProject(input) {
-      const k = key(input.organization, input.project);
-      const existing = adoProjects.get(k);
-      const id = existing?.id ?? randomUUID();
-      adoProjects.set(k, { id });
+    async upsertExternalProject(input) {
+      const k = key(input.provider, input.organization, input.project);
+      const id = externalProjects.get(k)?.id ?? randomUUID();
+      externalProjects.set(k, { id });
       return { id };
     },
 
-    async upsertProjectSync(input) {
-      const k = key(input.planeProjectId, input.adoProjectId);
-      const existing = projectSyncs.get(k);
+    async upsertProjectConnection(input) {
+      const k = key(input.provider, input.planeProjectId, input.externalProjectId);
+      const existing = projectConnections.get(k);
       const id = existing?.id ?? randomUUID();
       const defaultLabelId = input.defaultLabelId ?? existing?.defaultLabelId ?? null;
-      projectSyncs.set(k, { id, defaultLabelId });
+      projectConnections.set(k, { id, defaultLabelId });
       return { id, defaultLabelId };
     },
 
-    async setProjectSyncDefaultLabel(id, labelId) {
-      for (const [k, value] of projectSyncs) {
-        if (value.id === id) projectSyncs.set(k, { id, defaultLabelId: labelId });
+    async setProjectConnectionDefaultLabel(id, labelId) {
+      for (const [k, value] of projectConnections) {
+        if (value.id === id) projectConnections.set(k, { id, defaultLabelId: labelId });
       }
     },
 
-    async getWorkItemSync(org, project, workItemId) {
-      return workItemSyncs.get(key(org, project, workItemId)) ?? null;
+    async getEntitySync(provider, org, project, externalId) {
+      return entitySyncs.get(key(provider, org, project, externalId)) ?? null;
     },
 
-    async upsertWorkItemSync(input) {
-      const k = key(input.adoOrg, input.adoProject, input.adoWorkItemId);
+    async upsertEntitySync(input) {
+      const k = key(input.provider, input.externalOrg, input.externalProject, input.externalId);
       const now = new Date().toISOString();
-      const existing = workItemSyncs.get(k);
-      const record: WorkItemSync = {
+      const existing = entitySyncs.get(k);
+      const record: EntitySync = {
         id: existing?.id ?? randomUUID(),
-        ado_org: input.adoOrg,
-        ado_project: input.adoProject,
-        ado_work_item_id: input.adoWorkItemId,
-        ado_work_item_url: input.adoWorkItemUrl ?? null,
+        provider: input.provider,
+        external_org: input.externalOrg,
+        external_project: input.externalProject,
+        external_id: input.externalId,
+        external_url: input.externalUrl ?? null,
+        external_rev: input.externalRev,
         plane_workspace_slug: input.planeWorkspaceSlug,
         plane_project_id: input.planeProjectId,
         plane_issue_id: input.planeIssueId,
-        project_sync_id: input.projectSyncId ?? null,
-        last_ado_rev: input.lastAdoRev,
+        project_connection_id: input.projectConnectionId ?? null,
         created_at: existing?.created_at ?? now,
         updated_at: now,
       };
-      workItemSyncs.set(k, record);
+      entitySyncs.set(k, record);
       return record;
     },
 

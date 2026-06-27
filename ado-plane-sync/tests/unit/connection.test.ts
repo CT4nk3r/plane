@@ -17,17 +17,17 @@ describe("bootstrapConnection", () => {
     const ctx = await bootstrapConnection(config, store, fakePlane(ensureLabel), silentLogger);
 
     expect(ensureLabel).toHaveBeenCalledWith("Azure DevOps");
-    expect(ctx.service).toBe("azure_devops");
+    expect(ctx.provider).toBe("azure_devops");
     expect(ctx.externalSource).toBe("azure_devops");
-    expect(ctx.adoOrg).toBe("myorg");
-    expect(ctx.adoProject).toBe("myproject");
+    expect(ctx.externalOrg).toBe("myorg");
+    expect(ctx.externalProject).toBe("myproject");
     expect(ctx.planeWorkspaceSlug).toBe("ws");
     expect(ctx.planeProjectId).toBe("proj-1");
     expect(ctx.defaultLabelId).toBe("label-default");
     expect(ctx.integrationId).toBeTruthy();
     expect(ctx.workspaceIntegrationId).toBeTruthy();
-    expect(ctx.adoProjectId).toBeTruthy();
-    expect(ctx.projectSyncId).toBeTruthy();
+    expect(ctx.externalProjectId).toBeTruthy();
+    expect(ctx.projectConnectionId).toBeTruthy();
     expect(ctx.stateMap.Active).toBe("In Progress");
   });
 
