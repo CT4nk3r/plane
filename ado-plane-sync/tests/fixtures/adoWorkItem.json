@@ -1,0 +1,22 @@
+{
+  "id": 42,
+  "rev": 3,
+  "fields": {
+    "System.Id": 42,
+    "System.Title": "Login button is misaligned",
+    "System.State": "Active",
+    "System.WorkItemType": "Bug",
+    "System.TeamProject": "myproject",
+    "System.Tags": "frontend",
+    "System.Description": "<div>The login button overlaps the email field.</div>",
+    "System.AssignedTo": {
+      "displayName": "Dev One",
+      "uniqueName": "dev@example.com",
+      "id": "ado-user-1"
+    }
+  },
+  "_links": {
+    "html": { "href": "https://dev.azure.com/myorg/myproject/_workitems/edit/42" }
+  },
+  "url": "https://dev.azure.com/myorg/_apis/wit/workItems/42"
+}

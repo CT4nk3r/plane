@@ -1,0 +1,12 @@
+# Standalone service: its own pnpm root so it stays fully isolated from the
+# parent Plane workspace (which globs apps/* and packages/*). This service is
+# intentionally NOT a Plane workspace member — it has its own lockfile and
+# node_modules and must not modify Plane's dependency management.
+packages: []
+
+# Allow esbuild (used by vitest/tsx) to run its install script.
+onlyBuiltDependencies:
+  - esbuild
+
+allowBuilds:
+  esbuild: true

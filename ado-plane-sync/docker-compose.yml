@@ -1,0 +1,37 @@
+# Azure DevOps -> Plane work item sync.
+#
+# `docker compose up` starts Postgres + the sync service. Provide secrets via a
+# local `.env` (copy from `.env.example`). DATABASE_URL and PORT below override
+# whatever is in `.env` so the service talks to the bundled database.
+
+services:
+  db:
+    image: postgres:15.7-alpine
+    environment:
+      POSTGRES_USER: ado_plane
+      POSTGRES_PASSWORD: ado_plane
+      POSTGRES_DB: ado_plane_sync
+    volumes:
+      - ado_plane_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ado_plane -d ado_plane_sync"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  ado-plane-sync:
+    build: .
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgres://ado_plane:ado_plane@db:5432/ado_plane_sync
+      PORT: "3100"
+    ports:
+      - "3100:3100"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  ado_plane_pgdata:
