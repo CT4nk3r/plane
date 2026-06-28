@@ -59,6 +59,15 @@ const envSchema = z.object({
   SYNC_PARENT: booleanString.default(true),
   SYNC_PRIORITY: booleanString.default(true),
 
+  // Reverse sync (Plane -> Azure DevOps). Off by default; opt-in.
+  REVERSE_SYNC_ENABLED: booleanString.default(false),
+  PLANE_WEBHOOK_SECRET: z.string().min(1).optional(),
+  ADO_DEFAULT_WORK_ITEM_TYPE: z.string().min(1).default("Task"),
+  ADO_DEFAULT_AREA_PATH: z.string().min(1).optional(),
+  ADO_DEFAULT_ITERATION_PATH: z.string().min(1).optional(),
+  REVERSE_STATE_MAP_JSON: z.string().default("{}"),
+  REVERSE_SYNC_ASSIGNEE: booleanString.default(true),
+
   // Service / database
   PORT: z.coerce.number().int().positive().default(3100),
   DATABASE_URL: z.string().min(1).optional(),
@@ -97,6 +106,16 @@ export interface Config {
     iterationsAsCycles: boolean;
     parent: boolean;
     priority: boolean;
+  };
+  reverse: {
+    enabled: boolean;
+    planeWebhookSecret?: string;
+    defaultWorkItemType: string;
+    defaultAreaPath?: string;
+    defaultIterationPath?: string;
+    /** Plane state name -> ADO state name (best-effort; unmapped states are skipped). */
+    stateMap: Record<string, string>;
+    syncAssignee: boolean;
   };
   port: number;
   databaseUrl?: string;
@@ -138,6 +157,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const stateMap = parseJson(e.STATE_MAP_JSON, stateMapSchema, "STATE_MAP_JSON");
   const stateGroupMap = parseJson(e.STATE_GROUP_MAP_JSON, stateGroupMapSchema, "STATE_GROUP_MAP_JSON");
   const userMap = parseJson(e.USER_MAP_JSON, userMapSchema, "USER_MAP_JSON");
+  const reverseStateMap = parseJson(e.REVERSE_STATE_MAP_JSON, stateMapSchema, "REVERSE_STATE_MAP_JSON");
+
+  if (e.REVERSE_SYNC_ENABLED && !e.PLANE_WEBHOOK_SECRET) {
+    throw new Error("PLANE_WEBHOOK_SECRET is required when REVERSE_SYNC_ENABLED is true");
+  }
 
   return {
     ado: {
@@ -169,6 +193,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       iterationsAsCycles: e.SYNC_ITERATIONS_AS_CYCLES,
       parent: e.SYNC_PARENT,
       priority: e.SYNC_PRIORITY,
+    },
+    reverse: {
+      enabled: e.REVERSE_SYNC_ENABLED,
+      planeWebhookSecret: e.PLANE_WEBHOOK_SECRET,
+      defaultWorkItemType: e.ADO_DEFAULT_WORK_ITEM_TYPE,
+      defaultAreaPath: e.ADO_DEFAULT_AREA_PATH,
+      defaultIterationPath: e.ADO_DEFAULT_ITERATION_PATH,
+      stateMap: reverseStateMap,
+      syncAssignee: e.REVERSE_SYNC_ASSIGNEE,
     },
     port: e.PORT,
     databaseUrl: e.DATABASE_URL,

@@ -38,6 +38,8 @@ export type CreateIssueResult =
 
 export interface PlaneClient {
   getWorkItemByExternalId(externalId: string, externalSource: string): Promise<PlaneIssue | null>;
+  /** Fetch a single Plane issue by its UUID (used to resolve a parent's external link). */
+  getIssueById(id: string): Promise<PlaneIssue | null>;
   createIssue(payload: PlaneIssuePayload): Promise<CreateIssueResult>;
   updateIssue(id: string, payload: Partial<PlaneIssuePayload>): Promise<PlaneIssue>;
   findStateByName(name: string): Promise<PlaneState | undefined>;
@@ -272,6 +274,20 @@ export function createPlaneClient(config: Config, logger: Logger): PlaneClient {
       } catch (error) {
         if (axiosStatus(error) === 404) return null;
         throw new Error(`Plane getWorkItemByExternalId(${externalId}) failed: ${describeAxiosError(error)}`);
+      }
+    },
+
+    async getIssueById(id): Promise<PlaneIssue | null> {
+      try {
+        const res = await http.get(`/work-items/${id}/`);
+        const data = res.data;
+        if (data && typeof data === "object" && "id" in data) {
+          return data as PlaneIssue;
+        }
+        return null;
+      } catch (error) {
+        if (axiosStatus(error) === 404) return null;
+        throw new Error(`Plane getIssueById(${id}) failed: ${describeAxiosError(error)}`);
       }
     },
 

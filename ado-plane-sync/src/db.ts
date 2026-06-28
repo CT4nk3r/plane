@@ -62,6 +62,7 @@ export interface UpsertEntitySyncInput {
   planeProjectId: string;
   planeIssueId: string;
   projectConnectionId?: string | null;
+  lastPlaneUpdatedAt?: string | null;
 }
 
 export interface RecordCommentSyncInput {
@@ -80,6 +81,7 @@ export interface SyncStore {
   ): Promise<{ id: string; defaultLabelId: string | null }>;
   setProjectConnectionDefaultLabel(id: string, labelId: string): Promise<void>;
   getEntitySync(provider: string, org: string, project: string, externalId: string): Promise<EntitySync | null>;
+  getEntitySyncByPlaneIssue(provider: string, planeIssueId: string): Promise<EntitySync | null>;
   upsertEntitySync(input: UpsertEntitySyncInput): Promise<EntitySync>;
   recordCommentSync(input: RecordCommentSyncInput): Promise<void>;
   close(): Promise<void>;
@@ -154,6 +156,7 @@ CREATE TABLE IF NOT EXISTS entity_item_syncs (
   plane_project_id TEXT NOT NULL,
   plane_issue_id TEXT NOT NULL,
   project_connection_id UUID REFERENCES project_connections(id) ON DELETE SET NULL,
+  last_plane_updated_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (provider, external_org, external_project, external_id)
@@ -191,6 +194,10 @@ export function createPool(databaseUrl: string): Pool {
 
 export async function ensureSchema(pool: Pool): Promise<void> {
   await pool.query(SCHEMA_SQL);
+  // Additive migration for stores created before reverse sync existed.
+  await pool.query(
+    `ALTER TABLE entity_item_syncs ADD COLUMN IF NOT EXISTS last_plane_updated_at TIMESTAMPTZ`,
+  );
 }
 
 // --- Postgres store --------------------------------------------------------
@@ -212,6 +219,9 @@ function rowToEntitySync(row: Record<string, unknown>): EntitySync {
     plane_project_id: String(row.plane_project_id),
     plane_issue_id: String(row.plane_issue_id),
     project_connection_id: (row.project_connection_id as string | null) ?? null,
+    last_plane_updated_at: row.last_plane_updated_at
+      ? new Date(row.last_plane_updated_at as string).toISOString()
+      : null,
     created_at: new Date(row.created_at as string).toISOString(),
     updated_at: new Date(row.updated_at as string).toISOString(),
   };
@@ -321,18 +331,28 @@ export function createPgSyncStore(pool: Pool): SyncStore {
       return res.rows[0] ? rowToEntitySync(res.rows[0]) : null;
     },
 
+    async getEntitySyncByPlaneIssue(provider, planeIssueId) {
+      const res = await pool.query(
+        `SELECT * FROM entity_item_syncs WHERE provider = $1 AND plane_issue_id = $2 LIMIT 1`,
+        [provider, planeIssueId],
+      );
+      return res.rows[0] ? rowToEntitySync(res.rows[0]) : null;
+    },
+
     async upsertEntitySync(input) {
       const res = await pool.query(
         `INSERT INTO entity_item_syncs
            (provider, external_org, external_project, external_id, external_url, external_rev,
-            plane_workspace_slug, plane_project_id, plane_issue_id, project_connection_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            plane_workspace_slug, plane_project_id, plane_issue_id, project_connection_id, last_plane_updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (provider, external_org, external_project, external_id) DO UPDATE
            SET external_url = EXCLUDED.external_url, external_rev = EXCLUDED.external_rev,
                plane_workspace_slug = EXCLUDED.plane_workspace_slug,
                plane_project_id = EXCLUDED.plane_project_id,
                plane_issue_id = EXCLUDED.plane_issue_id,
-               project_connection_id = EXCLUDED.project_connection_id, updated_at = now()
+               project_connection_id = EXCLUDED.project_connection_id,
+               last_plane_updated_at = COALESCE(EXCLUDED.last_plane_updated_at, entity_item_syncs.last_plane_updated_at),
+               updated_at = now()
          RETURNING *`,
         [
           input.provider,
@@ -345,6 +365,7 @@ export function createPgSyncStore(pool: Pool): SyncStore {
           input.planeProjectId,
           input.planeIssueId,
           input.projectConnectionId ?? null,
+          input.lastPlaneUpdatedAt ?? null,
         ],
       );
       return rowToEntitySync(res.rows[0]);
@@ -416,6 +437,15 @@ export function createInMemorySyncStore(): SyncStore {
       return entitySyncs.get(key(provider, org, project, externalId)) ?? null;
     },
 
+    async getEntitySyncByPlaneIssue(provider, planeIssueId) {
+      for (const record of entitySyncs.values()) {
+        if (record.provider === provider && record.plane_issue_id === planeIssueId) {
+          return record;
+        }
+      }
+      return null;
+    },
+
     async upsertEntitySync(input) {
       const k = key(input.provider, input.externalOrg, input.externalProject, input.externalId);
       const now = new Date().toISOString();
@@ -432,6 +462,7 @@ export function createInMemorySyncStore(): SyncStore {
         plane_project_id: input.planeProjectId,
         plane_issue_id: input.planeIssueId,
         project_connection_id: input.projectConnectionId ?? null,
+        last_plane_updated_at: input.lastPlaneUpdatedAt ?? existing?.last_plane_updated_at ?? null,
         created_at: existing?.created_at ?? now,
         updated_at: now,
       };

@@ -10,6 +10,7 @@ import type { Logger } from "../logger";
 import { mapWorkItem } from "../mappers/workItemMapper";
 import { parseWorkItemEvent } from "../parsers/azureDevOpsWebhook";
 import type { ConnectionContext } from "../types";
+import { createAzureDevOpsReverse } from "./azureDevOpsReverse";
 import { buildWorkItemWiql } from "./azureDevOpsBackfill";
 import type { Connector, MappedEntity, NormalizedEvent } from "./types";
 
@@ -18,10 +19,12 @@ export const AZURE_DEVOPS_WEBHOOK_SLUG = "azure-devops";
 export function createAzureDevOpsConnector(config: Config, logger: Logger): Connector {
   const ado: AzureDevOpsClient = createAzureDevOpsClient(config, logger);
   const provider = config.service;
+  const reverse = config.reverse.enabled ? createAzureDevOpsReverse(config, logger, ado) : undefined;
 
   return {
     provider,
     webhookSlug: AZURE_DEVOPS_WEBHOOK_SLUG,
+    reverse,
 
     parseWebhook(body, fallback): NormalizedEvent {
       const event = parseWorkItemEvent(body, fallback);

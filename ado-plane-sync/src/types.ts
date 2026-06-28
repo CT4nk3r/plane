@@ -38,6 +38,34 @@ export interface ParsedWebhookEvent {
   fields: Record<string, unknown>;
 }
 
+/**
+ * Normalized envelope extracted from an inbound Plane outbound webhook
+ * (`event: "issue"`). Drives the reverse (Plane -> external) sync.
+ */
+export interface PlaneIssueEvent {
+  /** Plane verb, normalized to create | update | delete. */
+  action: "create" | "update" | "delete";
+  issueId: string;
+  name: string;
+  descriptionHtml?: string;
+  /** Plane state name (e.g. "In Progress"), used for best-effort reverse state mapping. */
+  stateName?: string;
+  stateGroup?: string;
+  priority?: string;
+  /** Parent Plane issue UUID, if any. */
+  parentIssueId?: string;
+  assigneeIds: string[];
+  labelIds: string[];
+  /** External link if this issue is already mapped (e.g. ADO id + "azure_devops"). */
+  externalId?: string | null;
+  externalSource?: string | null;
+  planeProjectId: string;
+  /** Plane's own monotonic per-issue timestamp; the reverse echo-guard watermark. */
+  updatedAt: string;
+  sequenceId?: number;
+  raw: unknown;
+}
+
 // --- User mapping (native data.users idiom) --------------------------------
 
 export type UserImportMode = "map" | "invite" | false;
@@ -135,6 +163,8 @@ export interface EntitySync {
   plane_project_id: string;
   plane_issue_id: string;
   project_connection_id: string | null;
+  /** Watermark of the last Plane issue state we wrote/processed (echo-guard). */
+  last_plane_updated_at: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -8,7 +8,7 @@
  * entity, optionally post a backlink) and register it in `registry.ts`.
  */
 
-import type { ConnectionContext, ExternalUserRef, PlanePriority } from "../types";
+import type { ConnectionContext, ExternalUserRef, PlaneIssueEvent, PlanePriority } from "../types";
 
 export type WebhookParseErrorCode = "unsupported_event" | "invalid";
 
@@ -66,4 +66,47 @@ export interface Connector {
   addBacklink(event: NormalizedEvent, planeIssueUrl: string, ctx: ConnectionContext): Promise<number | null>;
   /** Enumerate entities to backfill for a scope (e.g. "assigned-to-me"). */
   listEntities(scope: string, ctx: ConnectionContext): Promise<NormalizedEvent[]>;
+  /** Optional reverse (Plane -> provider) write capability. */
+  readonly reverse?: ReverseConnector;
+}
+
+/** A Plane issue mapped to provider-neutral fields for a reverse (Plane -> external) write. */
+export interface ReverseMappedItem {
+  title: string;
+  descriptionHtml?: string;
+  /** Target external state name (already mapped from Plane); omit to use the type's default. */
+  stateName?: string;
+  areaPath?: string;
+  iterationPath?: string;
+}
+
+export interface ReverseWriteOptions {
+  /** Parent work item's external id, for hierarchy linking. */
+  parentExternalId?: string;
+  /** Resolved assignee identity (e.g. email) for the external system. */
+  assigneeEmail?: string;
+}
+
+export interface ReverseWriteResult {
+  externalId: string;
+  externalRev: number;
+  url?: string;
+}
+
+/**
+ * The reverse half of a connector: create/update the provider's work item from
+ * a Plane issue. The generic reverse engine owns orchestration (loop guards,
+ * external-id stamping, watermarks); the connector owns the provider specifics.
+ */
+export interface ReverseConnector {
+  /** Map a Plane issue event to neutral external fields (pure). */
+  mapPlaneIssue(event: PlaneIssueEvent): ReverseMappedItem;
+  /** Create the external work item; returns its id, rev, and html url. */
+  createExternalItem(item: ReverseMappedItem, opts: ReverseWriteOptions): Promise<ReverseWriteResult>;
+  /** Update the external work item; returns the new rev. */
+  updateExternalItem(
+    externalId: string,
+    item: ReverseMappedItem,
+    opts: ReverseWriteOptions,
+  ): Promise<{ externalRev: number }>;
 }

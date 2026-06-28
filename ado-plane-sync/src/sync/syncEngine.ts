@@ -15,7 +15,7 @@ import type { SyncStore } from "../db";
 import type { Logger } from "../logger";
 import { inferStateGroup } from "../mappers/stateMapper";
 import { resolveAssigneeId } from "../mappers/userMapper";
-import type { ConnectionContext, PlaneIssuePayload } from "../types";
+import type { ConnectionContext, PlaneIssue, PlaneIssuePayload } from "../types";
 
 export interface SyncDeps {
   config: Config;
@@ -94,27 +94,31 @@ export async function syncEntity(
   // 4. Resolve the target Plane issue and write (emulated upsert).
   let issueId: string;
   let action: SyncAction;
+  let resultIssue: PlaneIssue | undefined;
   const knownIssueId =
     existing?.plane_issue_id ?? (await lookupExistingIssueId(plane, mapped.externalId, mapped.externalSource));
 
   if (knownIssueId) {
-    await plane.updateIssue(knownIssueId, payload);
+    resultIssue = await plane.updateIssue(knownIssueId, payload);
     issueId = knownIssueId;
     action = "updated";
   } else {
     const result = await plane.createIssue(payload);
     if (result.status === "created") {
+      resultIssue = result.issue;
       issueId = result.issue.id;
       action = "created";
     } else {
-      await plane.updateIssue(result.id, payload);
+      resultIssue = await plane.updateIssue(result.id, payload);
       issueId = result.id;
       action = "updated";
     }
   }
 
-  // 5. Persist/refresh the mapping row.
-  const sync = await store.upsertEntitySync({
+  // 5. Persist/refresh the mapping row. `last_plane_updated_at` watermarks the
+  //    Plane state we just wrote so the reverse engine recognizes the webhook
+  //    this write triggers as an echo (and never pushes it back to ADO).
+  const upsertInput = {
     provider,
     externalOrg: org,
     externalProject: project,
@@ -125,7 +129,8 @@ export async function syncEntity(
     planeProjectId: connection.planeProjectId,
     planeIssueId: issueId,
     projectConnectionId: connection.projectConnectionId,
-  });
+  };
+  let sync = await store.upsertEntitySync({ ...upsertInput, lastPlaneUpdatedAt: planeUpdatedAt(resultIssue) });
 
   // 6. Sprint -> Plane cycle (find-or-create + assign). Best-effort.
   if (mapped.cycleName) {
@@ -135,12 +140,14 @@ export async function syncEntity(
     }
   }
 
-  // 7. Best-effort parent link (only when the parent is already synced).
+  // 7. Best-effort parent link (only when the parent is already synced). This is
+  //    the last Plane write, so refresh the echo watermark with its updated_at.
   if (mapped.parentExternalId) {
     const parentSync = await store.getEntitySync(provider, org, project, mapped.parentExternalId);
     if (parentSync) {
       try {
-        await plane.updateIssue(issueId, { parent: parentSync.plane_issue_id });
+        const parentRes = await plane.updateIssue(issueId, { parent: parentSync.plane_issue_id });
+        sync = await store.upsertEntitySync({ ...upsertInput, lastPlaneUpdatedAt: planeUpdatedAt(parentRes) });
       } catch (error) {
         logger.warn("sync.parent_link_failed", {
           externalId,
@@ -171,4 +178,9 @@ async function lookupExistingIssueId(
 ): Promise<string | null> {
   const found = await plane.getWorkItemByExternalId(externalId, externalSource);
   return found ? found.id : null;
+}
+
+/** Plane's monotonic per-issue timestamp from a write response (echo watermark). */
+function planeUpdatedAt(issue: PlaneIssue | undefined): string | null {
+  return issue && typeof issue.updated_at === "string" ? issue.updated_at : null;
 }

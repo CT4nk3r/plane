@@ -8,9 +8,11 @@ import type { ConnectorRegistry } from "./connectors/registry";
 import type { NormalizedEvent } from "./connectors/types";
 import type { JobQueue } from "./queue";
 import type { Logger } from "./logger";
+import type { ReverseOutcome, ReverseSyncDeps } from "./sync/reverseSyncEngine";
+import { syncPlaneIssue } from "./sync/reverseSyncEngine";
 import type { SyncDeps, SyncOutcome } from "./sync/syncEngine";
 import { syncEntity } from "./sync/syncEngine";
-import type { SyncJob } from "./types";
+import type { PlaneIssueEvent, SyncJob } from "./types";
 
 const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 5 * 60_000;
@@ -29,7 +31,7 @@ export interface WorkerDeps {
 }
 
 export type ProcessResult =
-  | { job: SyncJob; outcome: SyncOutcome }
+  | { job: SyncJob; outcome: SyncOutcome | ReverseOutcome }
   | { job: SyncJob; error: string };
 
 export interface Worker {
@@ -48,17 +50,21 @@ export function createWorker(deps: WorkerDeps): Worker {
     const job = await queue.claimNext();
     if (!job) return null;
 
-    const event = job.payload as NormalizedEvent;
-    const connector = registry.byProvider.get(event.provider);
+    const payload = job.payload as { direction?: string; event?: unknown } & NormalizedEvent;
+    const isReverse = Boolean(payload && payload.direction === "reverse");
+    const providerSlug = isReverse ? syncDeps.connection.provider : payload.provider;
+    const connector = registry.byProvider.get(providerSlug);
     if (!connector) {
-      const error = `No connector registered for provider "${event.provider}"`;
+      const error = `No connector registered for provider "${providerSlug}"`;
       await queue.fail(job.id, { error, nextAttemptAt: new Date(), exhausted: true });
-      logger.error("worker.no_connector", { jobId: job.id, provider: event.provider });
+      logger.error("worker.no_connector", { jobId: job.id, provider: providerSlug });
       return { job, error };
     }
 
     try {
-      const outcome = await syncEntity(connector, event, syncDeps);
+      const outcome = isReverse
+        ? await syncPlaneIssue(payload.event as PlaneIssueEvent, connector, syncDeps as ReverseSyncDeps)
+        : await syncEntity(connector, payload as NormalizedEvent, syncDeps);
       await queue.complete(job.id);
       return { job, outcome };
     } catch (error) {
@@ -68,7 +74,7 @@ export function createWorker(deps: WorkerDeps): Worker {
       await queue.fail(job.id, { error: message, nextAttemptAt, exhausted });
       logger.error("worker.job.failed", {
         jobId: job.id,
-        provider: event.provider,
+        provider: providerSlug,
         attempts: job.attempts,
         exhausted,
         error: message,
