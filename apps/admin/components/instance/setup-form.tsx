@@ -22,15 +22,27 @@ import { FormHeader } from "./form-header";
 // service initialization
 const authService = new AuthService();
 
-// error codes
+// error codes — values match the `error_message` name the backend returns on
+// the redirect (e.g. `?error_code=5021&error_message=PASSWORD_TOO_WEAK`).
 enum EErrorCodes {
   INSTANCE_NOT_CONFIGURED = "INSTANCE_NOT_CONFIGURED",
   ADMIN_ALREADY_EXIST = "ADMIN_ALREADY_EXIST",
-  REQUIRED_EMAIL_PASSWORD_FIRST_NAME = "REQUIRED_EMAIL_PASSWORD_FIRST_NAME",
-  INVALID_EMAIL = "INVALID_EMAIL",
-  INVALID_PASSWORD = "INVALID_PASSWORD",
-  USER_ALREADY_EXISTS = "USER_ALREADY_EXISTS",
+  REQUIRED_ADMIN_EMAIL_PASSWORD_FIRST_NAME = "REQUIRED_ADMIN_EMAIL_PASSWORD_FIRST_NAME",
+  INVALID_ADMIN_EMAIL = "INVALID_ADMIN_EMAIL",
+  ADMIN_USER_ALREADY_EXIST = "ADMIN_USER_ALREADY_EXIST",
+  PASSWORD_TOO_WEAK = "PASSWORD_TOO_WEAK",
 }
+
+// User-facing messages for the errors the admin sign-up endpoint can redirect with.
+const ADMIN_SETUP_ERROR_MESSAGES: Record<EErrorCodes, string> = {
+  [EErrorCodes.INSTANCE_NOT_CONFIGURED]: "Instance is not configured. Please contact your administrator.",
+  [EErrorCodes.ADMIN_ALREADY_EXIST]: "An admin already exists for this instance.",
+  [EErrorCodes.REQUIRED_ADMIN_EMAIL_PASSWORD_FIRST_NAME]: "First name, email and password are required.",
+  [EErrorCodes.INVALID_ADMIN_EMAIL]: "Please enter a valid email address.",
+  [EErrorCodes.ADMIN_USER_ALREADY_EXIST]: "An account with this email already exists. Please sign in instead.",
+  [EErrorCodes.PASSWORD_TOO_WEAK]:
+    "This password is too weak. Use a longer, less predictable password and avoid common words or simple patterns.",
+};
 
 type TError = {
   type: EErrorCodes | undefined;
@@ -62,7 +74,7 @@ export function InstanceSetupForm() {
   const searchParams = useSearchParams();
   const firstNameParam = searchParams?.get("first_name") || undefined;
   const lastNameParam = searchParams?.get("last_name") || undefined;
-  const companyParam = searchParams?.get("company") || undefined;
+  const companyParam = searchParams?.get("company_name") || undefined;
   const emailParam = searchParams?.get("email") || undefined;
   const isTelemetryEnabledParam = (searchParams?.get("is_telemetry_enabled") === "True" ? true : false) || true;
   const errorCode = searchParams?.get("error_code") || undefined;
@@ -99,24 +111,14 @@ export function InstanceSetupForm() {
 
   // derived values
   const errorData: TError = useMemo(() => {
-    if (errorCode && errorMessage) {
-      switch (errorCode) {
-        case EErrorCodes.INSTANCE_NOT_CONFIGURED:
-          return { type: EErrorCodes.INSTANCE_NOT_CONFIGURED, message: errorMessage };
-        case EErrorCodes.ADMIN_ALREADY_EXIST:
-          return { type: EErrorCodes.ADMIN_ALREADY_EXIST, message: errorMessage };
-        case EErrorCodes.REQUIRED_EMAIL_PASSWORD_FIRST_NAME:
-          return { type: EErrorCodes.REQUIRED_EMAIL_PASSWORD_FIRST_NAME, message: errorMessage };
-        case EErrorCodes.INVALID_EMAIL:
-          return { type: EErrorCodes.INVALID_EMAIL, message: errorMessage };
-        case EErrorCodes.INVALID_PASSWORD:
-          return { type: EErrorCodes.INVALID_PASSWORD, message: errorMessage };
-        case EErrorCodes.USER_ALREADY_EXISTS:
-          return { type: EErrorCodes.USER_ALREADY_EXISTS, message: errorMessage };
-        default:
-          return { type: undefined, message: undefined };
-      }
-    } else return { type: undefined, message: undefined };
+    // The backend redirects with `error_code` (numeric) and `error_message` (the
+    // stable error NAME). Match on the name so the failure is surfaced instead of
+    // silently bouncing the user back to the form.
+    if (errorCode && errorMessage && errorMessage in ADMIN_SETUP_ERROR_MESSAGES) {
+      const type = errorMessage as EErrorCodes;
+      return { type, message: ADMIN_SETUP_ERROR_MESSAGES[type] };
+    }
+    return { type: undefined, message: undefined };
   }, [errorCode, errorMessage]);
 
   const isButtonDisabled = useMemo(
@@ -147,9 +149,8 @@ export function InstanceSetupForm() {
           />
           {errorData.type &&
             errorData?.message &&
-            ![EErrorCodes.INVALID_EMAIL, EErrorCodes.INVALID_PASSWORD].includes(errorData.type) && (
-              <Banner type="error" message={errorData?.message} />
-            )}
+            errorData.type !== EErrorCodes.INVALID_ADMIN_EMAIL &&
+            errorData.type !== EErrorCodes.PASSWORD_TOO_WEAK && <Banner type="error" message={errorData?.message} />}
           <form
             className="space-y-4"
             method="POST"
@@ -221,10 +222,10 @@ export function InstanceSetupForm() {
                 placeholder="name@company.com"
                 value={formData.email}
                 onChange={(e) => handleFormChange("email", e.target.value)}
-                hasError={errorData.type && errorData.type === EErrorCodes.INVALID_EMAIL ? true : false}
+                hasError={errorData.type === EErrorCodes.INVALID_ADMIN_EMAIL}
                 autoComplete="off"
               />
-              {errorData.type && errorData.type === EErrorCodes.INVALID_EMAIL && errorData.message && (
+              {errorData.type && errorData.type === EErrorCodes.INVALID_ADMIN_EMAIL && errorData.message && (
                 <p className="px-1 text-11 text-danger-primary">{errorData.message}</p>
               )}
             </div>
@@ -265,7 +266,7 @@ export function InstanceSetupForm() {
                   placeholder="New password"
                   value={formData.password}
                   onChange={(e) => handleFormChange("password", e.target.value)}
-                  hasError={errorData.type && errorData.type === EErrorCodes.INVALID_PASSWORD ? true : false}
+                  hasError={errorData.type === EErrorCodes.PASSWORD_TOO_WEAK}
                   onFocus={() => setIsPasswordInputFocused(true)}
                   onBlur={() => setIsPasswordInputFocused(false)}
                   autoComplete="new-password"
@@ -290,7 +291,7 @@ export function InstanceSetupForm() {
                   </button>
                 )}
               </div>
-              {errorData.type && errorData.type === EErrorCodes.INVALID_PASSWORD && errorData.message && (
+              {errorData.type && errorData.type === EErrorCodes.PASSWORD_TOO_WEAK && errorData.message && (
                 <p className="px-1 text-11 text-danger-primary">{errorData.message}</p>
               )}
               <PasswordStrengthIndicator password={formData.password} isFocused={isPasswordInputFocused} />
