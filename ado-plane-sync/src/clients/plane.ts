@@ -9,7 +9,7 @@
  */
 
 import axios from "axios";
-import type { AxiosInstance } from "axios";
+import type { AxiosInstance, InternalAxiosRequestConfig } from "axios";
 import type { Config } from "../config";
 import type { Logger } from "../logger";
 import type {
@@ -69,6 +69,30 @@ export function createPlaneClient(config: Config, logger: Logger): PlaneClient {
       "Content-Type": "application/json",
     },
     timeout: 30_000,
+  });
+
+  // Plane enforces a per-API-key rate limit (default 60/min, HTTP 429
+  // RATE_LIMIT_EXCEEDED). Transparently retry throttled requests, honoring the
+  // Retry-After header when present, else exponential backoff. This keeps both
+  // bulk backfills and live webhook sync resilient on any instance.
+  const maxRateLimitRetries = 8;
+  http.interceptors.response.use(undefined, async (error: unknown) => {
+    if (!axios.isAxiosError(error) || error.response?.status !== 429 || !error.config) {
+      throw error;
+    }
+    const cfg = error.config as InternalAxiosRequestConfig & { __retryCount?: number };
+    cfg.__retryCount = (cfg.__retryCount ?? 0) + 1;
+    if (cfg.__retryCount > maxRateLimitRetries) {
+      throw error;
+    }
+    const retryAfter = Number(error.response.headers?.["retry-after"]);
+    const waitMs =
+      Number.isFinite(retryAfter) && retryAfter > 0
+        ? retryAfter * 1000
+        : Math.min(30_000, 500 * 2 ** cfg.__retryCount);
+    logger.warn("plane.rate_limited", { attempt: cfg.__retryCount, waitMs });
+    await new Promise((resolve) => setTimeout(resolve, waitMs));
+    return http.request(cfg);
   });
 
   // Lazily-loaded caches (stable within a process run; updated on create).
@@ -200,6 +224,7 @@ export function createPlaneClient(config: Config, logger: Logger): PlaneClient {
 
       const res = await http.post("/cycles/", {
         name,
+        project_id: projectId,
         external_id: name,
         external_source: externalSource,
       });
